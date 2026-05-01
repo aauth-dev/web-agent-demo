@@ -3019,6 +3019,12 @@
         label_error_network_template: "Agent \u2192 Notes Resource: POST {path} (network error)",
         description: "The agent POSTs the operations it wants to the resource's authorize endpoint, signed with its agent_token. The resource responds with a resource_token naming an R3 document the Person Server will fetch during token exchange."
       },
+      r3_document_request: {
+        label_template: "Demo: GET {path} (R3 document)",
+        label_resolved_template: "Demo: GET {path} (R3 document)",
+        label_error_network_template: "Demo: GET {path} (network error)",
+        description: "The resource_token's r3_uri claim points at the R3 document the Person Server is about to fetch. In production this endpoint is gated on a PS HTTP signature; the notes resource leaves it publicly fetchable so the playground can preview the exact JSON the PS will receive."
+      },
       ps_token_request: {
         label_template: "Agent \u2192 Person Server: POST {path}",
         label_resolved_template: "Agent \u2192 Person Server: POST {path}",
@@ -4755,6 +4761,33 @@ ${renderJSON(body)}`;
     const hints = getHints();
     await runNotesAuthorize(operations, bindingPs, hints);
   }
+  async function previewR3Document(rtPayload) {
+    const r3Uri = rtPayload?.r3_uri;
+    if (!r3Uri) return;
+    let r3Path = r3Uri;
+    try {
+      r3Path = new URL(r3Uri).pathname;
+    } catch {
+    }
+    const step = addLogStep(
+      fmt(copy("notes.r3_document_request.label_template"), { path: r3Path }),
+      "pending",
+      desc("notes.r3_document_request") + formatRequest("GET", r3Uri, null, null)
+    );
+    try {
+      const res = await fetch(r3Uri);
+      const body = await res.json().catch(() => null);
+      resolveStep(
+        step,
+        res.ok ? "success" : "error",
+        fmt(copy("notes.r3_document_request.label_resolved_template"), { path: r3Path, status: res.status })
+      );
+      appendStepBody(step, formatResponse(res.status, null, body));
+    } catch (err) {
+      resolveStep(step, "error", fmt(copy("notes.r3_document_request.label_error_network_template"), { path: r3Path }));
+      appendStepBody(step, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
+    }
+  }
   async function runNotesAuthorize(operations, bindingPs, hints) {
     const keyPair = window.aauthEphemeral.get();
     const agentToken = localStorage.getItem("aauth-agent-token");
@@ -4809,6 +4842,7 @@ ${renderJSON(body)}`;
         resolveStep(step1, "success", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
         appendStepBody(step1, formatResponse(res.status, null, body));
         appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken)));
+        await previewR3Document(decodeJWTPayloadBrowser(resourceToken));
       } else {
         resolveStep(step1, "error", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
         appendStepBody(step1, formatResponse(res.status, null, body) + anotherRequestButton());

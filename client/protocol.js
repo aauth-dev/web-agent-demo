@@ -2286,6 +2286,32 @@ async function startNotes() {
   await runNotesAuthorize(operations, bindingPs, hints)
 }
 
+// Demo-only: GET the resource_token's r3_uri and pretty-print the
+// R3 document the Person Server is about to fetch. The notes resource
+// leaves /r3/:id publicly fetchable in demo mode (production would
+// require a PS HTTP signature), so this is a read-only preview.
+async function previewR3Document(rtPayload) {
+  const r3Uri = rtPayload?.r3_uri
+  if (!r3Uri) return
+  let r3Path = r3Uri
+  try { r3Path = new URL(r3Uri).pathname } catch {}
+  const step = addLogStep(
+    fmt(copy('notes.r3_document_request.label_template'), { path: r3Path }),
+    'pending',
+    desc('notes.r3_document_request') + formatRequest('GET', r3Uri, null, null),
+  )
+  try {
+    const res = await fetch(r3Uri)
+    const body = await res.json().catch(() => null)
+    resolveStep(step, res.ok ? 'success' : 'error',
+      fmt(copy('notes.r3_document_request.label_resolved_template'), { path: r3Path, status: res.status }))
+    appendStepBody(step, formatResponse(res.status, null, body))
+  } catch (err) {
+    resolveStep(step, 'error', fmt(copy('notes.r3_document_request.label_error_network_template'), { path: r3Path }))
+    appendStepBody(step, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
+  }
+}
+
 async function runNotesAuthorize(operations, bindingPs, hints) {
   const keyPair = window.aauthEphemeral.get()
   const agentToken = localStorage.getItem('aauth-agent-token')
@@ -2346,6 +2372,7 @@ async function runNotesAuthorize(operations, bindingPs, hints) {
       resolveStep(step1, 'success', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
       appendStepBody(step1, formatResponse(res.status, null, body))
       appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken)))
+      await previewR3Document(decodeJWTPayloadBrowser(resourceToken))
     } else {
       resolveStep(step1, 'error', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
       appendStepBody(step1, formatResponse(res.status, null, body) + anotherRequestButton())

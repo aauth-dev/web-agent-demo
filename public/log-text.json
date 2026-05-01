@@ -196,6 +196,12 @@
       "label_error_network_template": "Agent → Notes Resource: POST {path} (network error)",
       "description": "The agent POSTs the operations it wants to the resource's authorize endpoint, signed with its agent_token. The resource responds with a resource_token naming an R3 document the Person Server will fetch during token exchange."
     },
+    "r3_document_request": {
+      "label_template": "Demo: GET {path} (R3 document)",
+      "label_resolved_template": "Demo: GET {path} (R3 document)",
+      "label_error_network_template": "Demo: GET {path} (network error)",
+      "description": "The resource_token's r3_uri claim points at the R3 document the Person Server is about to fetch. In production this endpoint is gated on a PS HTTP signature; the notes resource leaves it publicly fetchable so the playground can preview the exact JSON the PS will receive."
+    },
     "ps_token_request": {
       "label_template": "Agent → Person Server: POST {path}",
       "label_resolved_template": "Agent → Person Server: POST {path}",
