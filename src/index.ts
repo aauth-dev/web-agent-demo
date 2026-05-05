@@ -1,27 +1,15 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import type { Env, BootstrapTokenPayload, Binding, BootstrapTransaction, RefreshTransaction } from './types'
-import { verifySigJwt, ourJwksVerifier, psJwksVerifier } from './httpsig-verify'
+import type { Env } from './types'
+import { verifySigJwt, verifySigHwk, ourJwksVerifier, psJwksVerifier } from './httpsig-verify'
 import {
   importSigningKey,
   getPublicJWK,
   signJWT,
   generateJTI,
   computeJwkThumbprint,
-  decodeJWTPayload,
-  verifyJWT,
-  base64urlEncode,
   sanitizeCnfJwk,
 } from './crypto'
-import {
-  deriveBindingKey,
-  getBinding,
-  putBinding,
-  createRegistrationOptionsForBinding,
-  createAuthenticationOptionsForBinding,
-  verifyAndStoreRegistration,
-  verifyAssertion,
-} from './webauthn'
 import { generateAgentLocal } from './agent-local'
 
 type HonoEnv = { Bindings: Env }
@@ -79,6 +67,12 @@ const PS_IDENTITY_SCOPES: Set<string> = new Set([
   'roles',
 ])
 
+// KV TTL for the (jkt → name) and (name → jkt) mappings. 90 days lets the
+// same browser ephemeral keep its agent local-part across visits without
+// growing the namespace forever — once a key is gone, the local-part is
+// freed for re-use on a future enrollment.
+const AGENT_NAME_TTL_SECONDS = 60 * 60 * 24 * 90
+
 // ── Well-known endpoints ──
 
 app.get('/.well-known/aauth-agent.json', (c) => {
@@ -89,10 +83,8 @@ app.get('/.well-known/aauth-agent.json', (c) => {
     client_name: c.env.AGENT_NAME,
     name: c.env.AGENT_NAME,
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
-    bootstrap_endpoint: `${origin}/bootstrap/challenge`,
-    bootstrap_verify_endpoint: `${origin}/bootstrap/verify`,
-    refresh_endpoint: `${origin}/refresh/challenge`,
-    refresh_verify_endpoint: `${origin}/refresh/verify`,
+    bootstrap_endpoint: `${origin}/bootstrap`,
+    refresh_endpoint: `${origin}/refresh`,
     callback_endpoint: `${origin}/callback`,
     login_endpoint: `${origin}/login`,
     localhost_callback_allowed: true,
@@ -116,354 +108,137 @@ app.get('/.well-known/jwks.json', async (c) => {
   return c.json({ keys: [publicJwk] })
 })
 
-// ── Bootstrap: step 1 (challenge) ──
+// ── Bootstrap ──
 //
-// The agent has already completed a PS /bootstrap ceremony and holds a
-// bootstrap_token whose cnf.jwk binds the agent's ephemeral key.
+// Per draft-hardt-aauth-bootstrap, the agent provider issues an agent
+// token directly: the agent generates a signing key, signs the request
+// with sig=hwk, and the AP returns a token bound to that key. No PS
+// involvement at this stage — the PS binds the agent to a person lazily,
+// on the agent's first three-party flow.
 //
-// We verify the token (signature via PS JWKS, aud, exp, jti replay, cnf
-// matches ephemeral), look up or create the (ps_url, user_sub) binding,
-// and return a WebAuthn challenge — register for new bindings, assert
-// for existing ones. The transaction id ties the challenge to the already-
-// validated bootstrap claims so /bootstrap/verify doesn't re-verify.
-//
-// SECURITY NOTE: attestation is required. This excludes platforms without
-// WebAuthn platform authenticators — acknowledged gap, to be revisited.
+// This endpoint maintains a stored mapping (jkt ↔ agent local-part) in
+// KV so that the same browser ephemeral always resolves to the same
+// `aauth:local@host` identifier on repeat calls. A new key gets a new
+// local-part — no per-user identity is involved.
 
-app.post('/bootstrap/challenge', async (c) => {
-  // The request is signed with sig=jwt;jwt=<bootstrap_token>. httpSigVerify
-  // extracts bootstrap_token.cnf.jwk from Signature-Key and verifies the
-  // RFC 9421 signature against it (the PS already bound this key to the
-  // user at bootstrap consent), and we verify the bootstrap_token's own
-  // JWT signature against the PS JWKS via psJwksVerifier.
-  //
-  // Body is empty: the bootstrap_token rides in Signature-Key, the
-  // ephemeral key is bound by bootstrap_token.cnf.jwk and proven by the
-  // HTTP signature, and the agent_local is minted server-side below.
-  const verifyRes = await verifySigJwt(c, {
-    verifyInner: psJwksVerifier(),
-    // bootstrap_token has no iss constraint at this layer; we check aud
-    // below explicitly. allowExpired is false so we reject expired tokens
-    // via the exp check inside the helper.
-  })
+app.post('/bootstrap', async (c) => {
+  const verifyRes = await verifySigHwk(c)
   if (verifyRes instanceof Response) return verifyRes
 
-  const payload = verifyRes.innerPayload as unknown as BootstrapTokenPayload
-
-  // Claim checks.
-  const origin = c.env.ORIGIN
-  const now = Math.floor(Date.now() / 1000)
-  if (payload.aud !== origin) return c.json({ error: `aud mismatch: expected ${origin}` }, 401)
-  if (!payload.iat || payload.iat > now + 60) return c.json({ error: 'bootstrap_token not yet valid' }, 401)
-  if (!payload.sub) return c.json({ error: 'bootstrap_token missing sub' }, 401)
-  if (!payload.cnf?.jwk) return c.json({ error: 'bootstrap_token missing cnf.jwk' }, 401)
-  if (!payload.jti) return c.json({ error: 'bootstrap_token missing jti' }, 401)
-
-  // Replay guard (jti seen before).
-  const jtiKey = `jti:${payload.jti}`
-  const seen = await c.env.WEBAUTHN_KV.get(jtiKey)
-  if (seen) return c.json({ error: 'bootstrap_token replayed' }, 401)
-  const jtiTtl = Math.max(60, payload.exp - now)
-  await c.env.WEBAUTHN_KV.put(jtiKey, '1', { expirationTtl: jtiTtl })
-
-  // Derive binding key and look up existing binding.
-  const bindingKey = await deriveBindingKey(payload.iss, payload.sub)
-  const existing = await getBinding(c.env, bindingKey)
-
-  const host = new URL(origin).hostname
-  // First bootstrap for this (PS, user) mints a fresh agent_local
-  // server-side; subsequent bootstraps or refreshes reuse the stored
-  // aauth_sub so the identifier is stable across devices and
-  // ephemeral-key rotations for the same binding. The local part is
-  // intentionally not derived from any user identifier.
-  const aauthSub = existing?.aauth_sub ?? `aauth:${generateAgentLocal()}@${host}`
-
-  const rpID = host
-  const rpName = c.env.AGENT_NAME
-  const displayName = `AAuth user (${new URL(payload.iss).host})`
-
-  let type: 'register' | 'assert'
-  let options: any
-  if (!existing || existing.credentials.length === 0) {
-    type = 'register'
-    options = await createRegistrationOptionsForBinding(c.env, bindingKey, displayName, rpName, rpID)
-  } else {
-    type = 'assert'
-    options = await createAuthenticationOptionsForBinding(c.env, existing, rpID)
-  }
-
-  // Stash the bootstrap transaction so /bootstrap/verify can mint tokens
-  // without re-verifying the bootstrap_token.
-  const tx: BootstrapTransaction = {
-    binding_key: bindingKey,
-    ps_url: payload.iss,
-    user_sub: payload.sub,
-    aauth_sub: aauthSub,
-    ephemeral_jwk: payload.cnf.jwk,
-    challenge: options.challenge,
-    type,
-    created_at: Date.now(),
-  }
-  const txId = base64urlEncode(crypto.getRandomValues(new Uint8Array(24)))
-  await c.env.WEBAUTHN_KV.put(`bootstrap_tx:${txId}`, JSON.stringify(tx), { expirationTtl: 300 })
-
-  return c.json({
-    bootstrap_tx_id: txId,
-    webauthn_type: type,
-    webauthn_options: options,
-  })
-})
-
-// ── Bootstrap: step 2 (verify WebAuthn + mint tokens) ──
-
-app.post('/bootstrap/verify', async (c) => {
-  // Signed with sig=jwt;jwt=<bootstrap_token> — same scheme as /challenge.
-  // Verify the HTTP signature, then cross-check that the signing token's
-  // cnf.jwk matches the ephemeral stored in the transaction (ties this
-  // call to the same key that just went through /challenge).
-  const verifyRes = await verifySigJwt(c, {
-    verifyInner: psJwksVerifier(),
-  })
-  if (verifyRes instanceof Response) return verifyRes
-
-  let body: { bootstrap_tx_id: string; webauthn_response: any }
+  let body: { ps?: string }
   try {
-    body = JSON.parse(verifyRes.rawBody)
+    body = verifyRes.rawBody.length ? JSON.parse(verifyRes.rawBody) : {}
   } catch {
     return c.json({ error: 'invalid JSON body' }, 400)
   }
-  if (!body.bootstrap_tx_id || !body.webauthn_response) {
-    return c.json({ error: 'missing bootstrap_tx_id or webauthn_response' }, 400)
-  }
 
-  const tx = (await c.env.WEBAUTHN_KV.get(`bootstrap_tx:${body.bootstrap_tx_id}`, 'json')) as BootstrapTransaction | null
-  if (!tx) return c.json({ error: 'transaction not found or expired' }, 400)
-
-  // The bootstrap_token's cnf.jwk must be the SAME ephemeral the tx was
-  // keyed to at /challenge. Prevents someone with a different valid
-  // bootstrap_token (for the same PS) from completing this /verify call.
-  const tokenCnf = (verifyRes.innerPayload as any)?.cnf?.jwk
-  if (!tokenCnf) return c.json({ error: 'bootstrap_token missing cnf.jwk' }, 401)
-  const tokenThumb = await computeJwkThumbprint(tokenCnf)
-  const txThumb = await computeJwkThumbprint(tx.ephemeral_jwk)
-  if (tokenThumb !== txThumb) {
-    return c.json({ error: 'bootstrap_token cnf does not match transaction' }, 401)
-  }
-
-  const origin = c.env.ORIGIN
-  const rpID = new URL(origin).hostname
-
-  try {
-    if (tx.type === 'register') {
-      const binding: Binding = (await getBinding(c.env, tx.binding_key)) ?? {
-        ps_url: tx.ps_url,
-        user_sub: tx.user_sub,
-        aauth_sub: tx.aauth_sub,
-        created_at: Date.now(),
-        credentials: [],
-      }
-      await verifyAndStoreRegistration(c.env, origin, rpID, tx.challenge, body.webauthn_response, binding)
-    } else {
-      const binding = await getBinding(c.env, tx.binding_key)
-      if (!binding) return c.json({ error: 'binding missing for assertion' }, 400)
-      const { credential, newCounter } = await verifyAssertion(origin, rpID, tx.challenge, body.webauthn_response, binding)
-      credential.counter = newCounter
-      await putBinding(c.env, tx.binding_key, binding)
+  if (body.ps) {
+    try {
+      const psUrl = new URL(body.ps)
+      if (psUrl.protocol !== 'https:') return c.json({ error: 'ps must be HTTPS' }, 400)
+    } catch {
+      return c.json({ error: 'invalid ps URL' }, 400)
     }
-  } catch (err) {
-    return c.json({ error: `WebAuthn verification failed: ${(err as Error).message}` }, 401)
   }
 
-  // Clean up single-use transaction + challenge.
-  await c.env.WEBAUTHN_KV.delete(`bootstrap_tx:${body.bootstrap_tx_id}`)
-  await c.env.WEBAUTHN_KV.delete(`challenge:${tx.challenge}`)
+  const host = new URL(c.env.ORIGIN).hostname
+
+  // Look up an existing local-part for this thumbprint, or mint a fresh one.
+  // Both directions are stored so /refresh can resolve a name from the
+  // same key on a return visit. A fresh key always gets a fresh name —
+  // we never re-use a local-part across distinct keys.
+  let agentLocal = await c.env.WEBAUTHN_KV.get(`agent:name:${verifyRes.jkt}`)
+  if (!agentLocal) {
+    agentLocal = generateAgentLocal()
+    await c.env.WEBAUTHN_KV.put(`agent:name:${verifyRes.jkt}`, agentLocal, { expirationTtl: AGENT_NAME_TTL_SECONDS })
+    await c.env.WEBAUTHN_KV.put(`agent:key:${agentLocal}`, verifyRes.jkt, { expirationTtl: AGENT_NAME_TTL_SECONDS })
+  }
 
   return c.json(await mintAgentToken(c.env, {
-    aauthSub: tx.aauth_sub,
-    psUrl: tx.ps_url,
-    ephemeralJwk: tx.ephemeral_jwk,
+    aauthSub: `aauth:${agentLocal}@${host}`,
+    psUrl: body.ps,
+    jwk: verifyRes.publicJwk,
   }))
 })
 
-// ── Binding delete (playground Reset button) ──
+// ── Refresh ──
 //
-// Lets the client drop its server-side binding so the next bootstrap for
-// the same (PS, user) pair runs the full register path (fresh WebAuthn
-// credential, new aauth_sub).
-//
-// Authenticated with sig=jwt;jwt=<agent_token>. The agent_token's sub
-// must match the binding's aauth_sub — you can only forget your own.
-app.post('/binding/forget', async (c) => {
-  const ourJwk = await getPublicJWK(c.env.SIGNING_KEY)
-  const origin = c.env.ORIGIN
-  const verifyRes = await verifySigJwt(c, {
-    verifyInner: ourJwksVerifier(ourJwk),
-    expectedIss: origin,
-    // Allow expired tokens — reset after your agent_token has lapsed is
-    // the common case.
-    allowExpired: true,
-  })
+// The agent signs with the same hwk key that's recorded against its
+// local-part. We look up the name by thumbprint, mint a fresh token
+// bound to the same key, and return it. No key rotation — the agent's
+// durable key is unchanged across refreshes (per the bootstrap draft's
+// web-app refresh pattern).
+
+app.post('/refresh', async (c) => {
+  const verifyRes = await verifySigHwk(c)
   if (verifyRes instanceof Response) return verifyRes
 
-  let body: { binding_key: string }
+  let body: { ps?: string }
   try {
-    body = JSON.parse(verifyRes.rawBody)
+    body = verifyRes.rawBody.length ? JSON.parse(verifyRes.rawBody) : {}
   } catch {
     return c.json({ error: 'invalid JSON body' }, 400)
   }
-  if (!body.binding_key) return c.json({ error: 'missing binding_key' }, 400)
 
-  const binding = await getBinding(c.env, body.binding_key)
-  // If already forgotten, no-op success (idempotent reset).
-  if (!binding) return c.json({ ok: true })
-
-  if (verifyRes.innerPayload?.sub !== binding.aauth_sub) {
-    return c.json({ error: 'agent_token sub does not match binding' }, 401)
+  const agentLocal = await c.env.WEBAUTHN_KV.get(`agent:name:${verifyRes.jkt}`)
+  if (!agentLocal) {
+    return c.json({ error: 'agent not enrolled — bootstrap first' }, 404)
   }
 
-  await c.env.WEBAUTHN_KV.delete(`binding:${body.binding_key}`)
+  const host = new URL(c.env.ORIGIN).hostname
+  return c.json(await mintAgentToken(c.env, {
+    aauthSub: `aauth:${agentLocal}@${host}`,
+    psUrl: body.ps,
+    jwk: verifyRes.publicJwk,
+  }))
+})
+
+// ── Agent forget ──
+//
+// Drops the (jkt ↔ local-part) mapping so the next /bootstrap with the
+// same key mints a fresh local-part. Lets the playground's Reset button
+// fully reset the demo's identity instead of carrying the prior name
+// across a "fresh start". Authenticated by sig=hwk — only the holder of
+// the key can release its name.
+app.post('/agent/forget', async (c) => {
+  const verifyRes = await verifySigHwk(c)
+  if (verifyRes instanceof Response) return verifyRes
+
+  const agentLocal = await c.env.WEBAUTHN_KV.get(`agent:name:${verifyRes.jkt}`)
+  await c.env.WEBAUTHN_KV.delete(`agent:name:${verifyRes.jkt}`)
+  if (agentLocal) await c.env.WEBAUTHN_KV.delete(`agent:key:${agentLocal}`)
   return c.json({ ok: true })
-})
-
-// ── Refresh: step 1 (WebAuthn assertion challenge) ──
-//
-// Client already holds a binding_key from an earlier bootstrap. It rotates
-// its ephemeral key and calls /refresh/challenge → /refresh/verify to mint
-// fresh agent + resource tokens. No PS involvement.
-
-app.post('/refresh/challenge', async (c) => {
-  // Signed with sig=jwt;jwt=<agent_token>. The agent_token may be expired
-  // (that's the whole point of refresh), so allowExpired: true tells the
-  // helper to skip its exp check. httpSigVerify still needs the signature
-  // to verify against agent_token.cnf.jwk — proving PoP of the ephemeral.
-  const ourJwk = await getPublicJWK(c.env.SIGNING_KEY)
-  const origin = c.env.ORIGIN
-  const verifyRes = await verifySigJwt(c, {
-    verifyInner: ourJwksVerifier(ourJwk),
-    expectedIss: origin,
-    allowExpired: true,
-  })
-  if (verifyRes instanceof Response) return verifyRes
-
-  let body: { binding_key: string; new_ephemeral_jwk: JsonWebKey }
-  try {
-    body = JSON.parse(verifyRes.rawBody)
-  } catch {
-    return c.json({ error: 'invalid JSON body' }, 400)
-  }
-  if (!body.binding_key || !body.new_ephemeral_jwk) {
-    return c.json({ error: 'missing binding_key or new_ephemeral_jwk' }, 400)
-  }
-
-  const binding = await getBinding(c.env, body.binding_key)
-  if (!binding) return c.json({ error: 'binding not found' }, 404)
-
-  // Agent_token's sub must match the binding's aauth_sub — you can only
-  // refresh your own binding.
-  if (verifyRes.innerPayload?.sub !== binding.aauth_sub) {
-    return c.json({ error: 'agent_token sub does not match binding' }, 401)
-  }
-
-  const rpID = new URL(c.env.ORIGIN).hostname
-  const options = await createAuthenticationOptionsForBinding(c.env, binding, rpID)
-
-  const tx: RefreshTransaction = {
-    binding_key: body.binding_key,
-    new_ephemeral_jwk: body.new_ephemeral_jwk,
-    challenge: options.challenge,
-    created_at: Date.now(),
-  }
-  const txId = base64urlEncode(crypto.getRandomValues(new Uint8Array(24)))
-  await c.env.WEBAUTHN_KV.put(`refresh_tx:${txId}`, JSON.stringify(tx), { expirationTtl: 300 })
-
-  return c.json({
-    refresh_tx_id: txId,
-    webauthn_options: options,
-  })
-})
-
-app.post('/refresh/verify', async (c) => {
-  // Signed with sig=jwt;jwt=<agent_token>, same shape as /challenge.
-  // allowExpired: true for the same reason.
-  const ourJwk = await getPublicJWK(c.env.SIGNING_KEY)
-  const origin = c.env.ORIGIN
-  const verifyRes = await verifySigJwt(c, {
-    verifyInner: ourJwksVerifier(ourJwk),
-    expectedIss: origin,
-    allowExpired: true,
-  })
-  if (verifyRes instanceof Response) return verifyRes
-
-  let body: { refresh_tx_id: string; webauthn_response: any }
-  try {
-    body = JSON.parse(verifyRes.rawBody)
-  } catch {
-    return c.json({ error: 'invalid JSON body' }, 400)
-  }
-  if (!body.refresh_tx_id || !body.webauthn_response) {
-    return c.json({ error: 'missing refresh_tx_id or webauthn_response' }, 400)
-  }
-
-  const tx = (await c.env.WEBAUTHN_KV.get(`refresh_tx:${body.refresh_tx_id}`, 'json')) as RefreshTransaction | null
-  if (!tx) return c.json({ error: 'transaction not found or expired' }, 400)
-
-  const binding = await getBinding(c.env, tx.binding_key)
-  if (!binding) return c.json({ error: 'binding not found' }, 404)
-
-  // Agent_token's sub must match the binding we're refreshing.
-  if (verifyRes.innerPayload?.sub !== binding.aauth_sub) {
-    return c.json({ error: 'agent_token sub does not match binding' }, 401)
-  }
-
-  const rpID = new URL(origin).hostname
-
-  try {
-    const { credential, newCounter } = await verifyAssertion(origin, rpID, tx.challenge, body.webauthn_response, binding)
-    credential.counter = newCounter
-    await putBinding(c.env, tx.binding_key, binding)
-  } catch (err) {
-    return c.json({ error: `WebAuthn verification failed: ${(err as Error).message}` }, 401)
-  }
-
-  await c.env.WEBAUTHN_KV.delete(`refresh_tx:${body.refresh_tx_id}`)
-  await c.env.WEBAUTHN_KV.delete(`challenge:${tx.challenge}`)
-
-  return c.json(await mintAgentToken(c.env, {
-    aauthSub: binding.aauth_sub,
-    psUrl: binding.ps_url,
-    ephemeralJwk: tx.new_ephemeral_jwk,
-  }))
 })
 
 // ── Token minting helper ──
 
 async function mintAgentToken(
   env: Env,
-  args: { aauthSub: string; psUrl: string; ephemeralJwk: JsonWebKey }
-): Promise<{ agent_token: string; agent_id: string; expires_in: number; ps: string }> {
+  args: { aauthSub: string; psUrl?: string; jwk: JsonWebKey }
+): Promise<{ agent_token: string; agent_id: string; expires_in: number; ps?: string }> {
   const origin = env.ORIGIN
   const privateKey = await importSigningKey(env.SIGNING_KEY)
   const publicJwk = await getPublicJWK(env.SIGNING_KEY)
   const now = Math.floor(Date.now() / 1000)
 
   const agentHeader = { alg: 'EdDSA', typ: 'aa-agent+jwt', kid: publicJwk.kid }
-  const agentPayload = {
+  const agentPayload: Record<string, unknown> = {
     iss: origin,
     dwk: 'aauth-agent.json',
     sub: args.aauthSub,
-    ps: args.psUrl,
     jti: generateJTI(),
-    cnf: { jwk: sanitizeCnfJwk(args.ephemeralJwk) },
+    cnf: { jwk: sanitizeCnfJwk(args.jwk) },
     iat: now,
     exp: now + 3600,
   }
+  if (args.psUrl) agentPayload.ps = args.psUrl
   const agentToken = await signJWT(agentHeader, agentPayload, privateKey)
 
   return {
     agent_token: agentToken,
     agent_id: args.aauthSub,
     expires_in: 3600,
-    ps: args.psUrl,
+    ...(args.psUrl ? { ps: args.psUrl } : {}),
   }
 }
 
@@ -482,7 +257,6 @@ app.post('/authorize', async (c) => {
   })
   if (verifyRes instanceof Response) return verifyRes
 
-  const agentToken = verifyRes.innerJwt
   const agentPayload = verifyRes.innerPayload as Record<string, unknown>
 
   let body: { ps: string; scope: string }

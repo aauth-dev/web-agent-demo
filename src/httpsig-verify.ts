@@ -84,6 +84,39 @@ export function ourJwksVerifier(ourJwk: JsonWebKey) {
   return (jwt: string) => verifyJWT(jwt, { keys: [ourJwk] })
 }
 
+// Result of verifying a sig=hwk request — the public key that signed it,
+// its JWK thumbprint (for KV lookup), and the raw body so the caller can
+// JSON.parse without re-consuming the stream.
+export interface SigHwkVerifyResult {
+  rawBody: string
+  publicJwk: JsonWebKey
+  jkt: string
+}
+
+// Verifies an RFC 9421 signature whose Signature-Key uses sig=hwk — the
+// agent presents its public key inline rather than referencing a token.
+// Used at /bootstrap and /refresh: the agent has no token yet (bootstrap)
+// or the AP looks the agent up by thumbprint instead (refresh).
+export async function verifySigHwk(c: Context): Promise<SigHwkVerifyResult | Response> {
+  const rawBody = await c.req.text()
+  const url = new URL(c.req.url)
+  const sigResult = await httpSigVerify({
+    method: c.req.method,
+    authority: url.host,
+    path: url.pathname,
+    query: url.search.replace(/^\?/, ''),
+    headers: c.req.raw.headers,
+    body: rawBody,
+  })
+  if (!sigResult.verified) {
+    return c.json({ error: `signature verification failed: ${sigResult.error || 'unknown'}` }, 401)
+  }
+  if (sigResult.keyType !== 'hwk') {
+    return c.json({ error: 'Signature-Key must use sig=hwk' }, 401)
+  }
+  return { rawBody, publicJwk: sigResult.publicKey, jkt: sigResult.thumbprint }
+}
+
 // Build a verifyInner that fetches the PS JWKS (via the JWT's iss+dwk)
 // and verifies against it. Used for auth_tokens at /api/demo.
 export function psJwksVerifier() {

@@ -1,9 +1,8 @@
 {
-  "_about": "Single source of truth for every label + description rendered into the protocol log. Templates use {placeholder} for dynamic values substituted at runtime. All references to the agent server are spelled 'Agent Server' (not 'AS') to avoid conflation with 'Access Server' elsewhere in the AAuth protocol. The person server is spelled 'Person Server' everywhere (including terse HTTP lines) for consistency.",
+  "_about": "Single source of truth for every label + description rendered into the protocol log. Templates use {placeholder} for dynamic values substituted at runtime. The agent provider is spelled 'Agent Provider' (not 'AP') to avoid conflation with 'Access Server'. The person server is spelled 'Person Server' everywhere for consistency.",
 
   "sections": {
     "bootstrap": "Bootstrap",
-    "bootstrap_resumed": "Bootstrap (resumed)",
     "refresh": "Refresh",
     "whoami": "Whoami",
     "whoami_resumed": "Whoami (resumed)",
@@ -14,129 +13,40 @@
 
   "bootstrap": {
     "generate_ephemeral": {
-      "label": "Agent: generate ephemeral key",
-      "description": "The agent creates a fresh signing keypair for this session. The private half never leaves this device, so tokens issued later are useless to anyone else."
+      "label": "Agent: generate signing key",
+      "description": "The agent creates a fresh signing keypair. The private half never leaves this device, so tokens issued later are useless to anyone else."
     },
-    "ps_discovery_request": {
-      "label_template": "Agent → Person Server: GET {path}",
-      "label_resolved_template": "Agent → Person Server: GET {path}",
-      "label_error_network_template": "Agent → Person Server: GET {path} (network error)",
-      "description": "Before the agent can talk to your Person Server, it asks which URLs to use for bootstrap and for sending you to consent."
-    },
-    "ps_bootstrap_request": {
-      "label_template": "Agent → Person Server: POST {path}",
-      "label_resolved_template": "Agent → Person Server: POST {path}",
-      "label_error_network_template": "Agent → Person Server: POST {path} (network error)",
-      "label_error_unexpected_template": "Agent → Person Server: POST {path} (unexpected)",
-      "description": "The agent tells your Person Server a new agent wants to connect. The Person Server replies with a URL to show you for approval, plus one the agent can check for your decision."
-    },
-    "ps_pending_longpoll": {
-      "label_template": "Agent → Person Server: GET {path} (long-poll)",
-      "label_resolved_template": "Agent → Person Server: GET {path}",
-      "label_resolved_no_token_template": "Agent → Person Server: GET {path} (no bootstrap_token)",
-      "description": "The agent keeps one request open while you decide, instead of polling every second. The Person Server answers the moment you approve or deny."
-    },
-    "ps_consent_prompt": {
-      "label": "User at Person Server: consent prompt",
-      "description": "Your Person Server asks if you trust this agent. Approve here on this device, or scan the QR to approve on another.",
-      "label_resolved_success": "User Consent Completed",
-      "label_resolved_denied": "Consent Denied",
-      "label_resolved_timed_out": "Consent Timed Out",
-      "label_resolved_no_token": "Pending returned no bootstrap_token"
-    },
-    "ps_bootstrap_token_received": {
-      "label": "Person Server response: bootstrap_token received",
-      "description": "Once you approve, the Person Server hands the agent a short-lived, single-use ticket proving you said yes — the agent redeems it with its own Agent Server next."
-    },
-    "ps_pending_bad_response": {
-      "label": "Bad /pending response",
-      "description": "The Person Server replied in a shape the agent didn't expect, so the bootstrap can't continue."
-    },
-    "ps_user_denied": {
-      "label": "User denied consent",
-      "description": ""
-    },
-    "ps_interaction_timed_out": {
-      "label": "Interaction timed out",
-      "description": "You didn't approve or deny in time, so the Person Server gave up waiting."
-    },
-    "agent_server_challenge_request": {
-      "label_template": "Agent → Agent Server: POST {path}",
-      "label_resolved_template": "Agent → Agent Server: POST {path}",
-      "label_error_network_template": "Agent → Agent Server: POST {path} (network error)",
-      "description": "The agent shows the Person Server's ticket to its Agent Server, which asks for a WebAuthn ceremony to confirm a real human is here."
-    },
-    "webauthn_ceremony_failed": {
-      "label": "WebAuthn ceremony failed",
-      "description": "The WebAuthn step didn't complete — likely cancelled, timed out, or the credential wasn't accepted."
-    },
-    "webauthn_ceremony_success": {
-      "label": "User at Browser: WebAuthn ceremony",
-      "description": "You complete the WebAuthn ceremony to sign the challenge, proving a human is present and the right credential is on this device."
-    },
-    "agent_server_verify_request": {
-      "label_template": "Agent → Agent Server: POST {path}",
-      "label_resolved_template": "Agent → Agent Server: POST {path}",
-      "label_error_network_template": "Agent → Agent Server: POST {path} (network error)",
-      "description": "The Agent Server verifies your WebAuthn response and remembers the pairing of you, this Person Server, and this device — so future refreshes skip the Person Server."
-    },
-    "ps_announce_request": {
-      "label_template": "Agent → Person Server: POST {path} (announce)",
-      "label_resolved_template": "Agent → Person Server: POST {path} (announce)",
-      "label_error_network_template": "Agent → Person Server: POST {path} (announce, network error)",
-      "description": "The agent posts an empty, agent_token-signed request back to the Person Server so the PS can bind the new aauth:local@domain agent identifier to your user record."
-    }
-  },
-
-  "bootstrap_resumed": {
-    "ps_consent_prompt": {
-      "label": "User at Person Server: consent prompt (resumed)",
-      "label_redirected": "Redirected to Person Server for consent",
-      "description": "You returned mid-approval (page reload or redirect back from the Person Server). The agent picks up the same pending request instead of starting over."
+    "agent_provider_request": {
+      "label_template": "Agent → Agent Provider: POST {path}",
+      "label_resolved_template": "Agent → Agent Provider: POST {path}",
+      "label_error_network_template": "Agent → Agent Provider: POST {path} (network error)",
+      "description": "The agent posts to the Agent Provider's bootstrap endpoint with a sig=hwk request — its public key is in the Signature-Key header, and the body names the Person Server the user picked. The Agent Provider records the (key thumbprint → agent name) mapping in its KV and returns an agent_token bound to the key."
     }
   },
 
   "refresh": {
     "cannot_refresh": {
       "label": "Cannot refresh",
-      "description": "No saved key + token pair on this device, so there's nothing to refresh — a full bootstrap is needed."
+      "description": "No saved key on this device, so there's nothing to refresh — a fresh bootstrap is needed."
     },
-    "stage_new_ephemeral": {
-      "label": "Agent: stage new ephemeral key",
-      "description": "The agent prepares a fresh keypair but doesn't use it yet. If the refresh fails for any reason, the old key and token still work."
-    },
-    "agent_server_refresh_challenge_request": {
-      "label_template": "Agent → Agent Server: POST {path}",
-      "label_resolved_template": "Agent → Agent Server: POST {path}",
-      "label_error_network_template": "Agent → Agent Server: POST {path} (network error)",
-      "description": "The agent asks its Agent Server for a WebAuthn challenge, signed with the old key so the server knows it's the same agent as before."
-    },
-    "webauthn_assertion_failed": {
-      "label": "WebAuthn assertion failed",
-      "description": "The WebAuthn step didn't complete — likely cancelled, timed out, or the credential wasn't accepted."
-    },
-    "webauthn_ceremony_success": {
-      "label": "User at Browser: WebAuthn ceremony",
-      "description": "You complete the WebAuthn ceremony to sign the refresh challenge, proving the same human is still here on this device."
-    },
-    "agent_server_refresh_verify_request": {
-      "label_template": "Agent → Agent Server: POST {path}",
-      "label_resolved_template": "Agent → Agent Server: POST {path}",
-      "label_error_network_template": "Agent → Agent Server: POST {path} (network error)",
-      "description": "The Agent Server verifies your response, swaps in the new key, and issues a fresh agent token — no trip back to your Person Server needed."
+    "agent_provider_request": {
+      "label_template": "Agent → Agent Provider: POST {path}",
+      "label_resolved_template": "Agent → Agent Provider: POST {path}",
+      "label_error_network_template": "Agent → Agent Provider: POST {path} (network error)",
+      "description": "The agent signs a refresh request with the same hwk key the Agent Provider already has on file. The Agent Provider looks up the agent name by thumbprint and mints a fresh agent_token bound to the same key."
     }
   },
 
   "authorize": {
     "missing_context": {
-      "label": "Missing agent_token or ephemeral key",
-      "description": "The agent doesn't have an agent token or key yet — bootstrap has to finish first."
+      "label": "Missing agent_token or signing key",
+      "description": "The agent doesn't have an agent_token or key yet — bootstrap has to finish first."
     },
-    "agent_server_authorize_request": {
-      "label_template": "Agent → Agent Server: POST {path}",
-      "label_resolved_template": "Agent → Agent Server: POST {path}",
-      "label_error_network_template": "Agent → Agent Server: POST {path} (network error)",
-      "description": "The agent asks its Agent Server for a resource token scoped to this Person Server and resource. The Agent Server signs it on the agent's behalf."
+    "agent_provider_authorize_request": {
+      "label_template": "Agent → Agent Provider: POST {path}",
+      "label_resolved_template": "Agent → Agent Provider: POST {path}",
+      "label_error_network_template": "Agent → Agent Provider: POST {path} (network error)",
+      "description": "The agent asks its Agent Provider for a resource token scoped to this Person Server and resource. The Agent Provider signs it on the agent's behalf."
     },
     "ps_token_request": {
       "label_template": "Agent → Person Server: POST {path}",
@@ -151,7 +61,7 @@
     },
     "ps_consent_prompt": {
       "label": "User at Person Server: consent prompt",
-      "description": "Your Person Server asks if this agent may use the new scope. Approve here, or scan the QR to approve on another device.",
+      "description": "Your Person Server asks if this agent may use the requested scope. Approve here, or scan the QR to approve on another device.",
       "label_resolved_success": "Interaction Completed",
       "label_resolved_denied": "Interaction Denied",
       "label_resolved_timed_out": "Interaction Timed Out"
@@ -305,9 +215,8 @@
   "ui": {
     "another_request_button": "Another Authorization Request",
     "approve_at_ps": {
-      "bootstrap_heading": "Approve this agent",
       "authorize_heading": "Approve this authorization request",
-      "continue_label": "Continue at your Person Server to approve this agent",
+      "continue_label": "Continue at your Person Server to approve this request",
       "or_another_device": "OR scan QR code",
       "copy_link_default": "Copy link",
       "copy_link_copied": "Copied!"

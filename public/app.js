@@ -2,12 +2,6 @@
 
 let agentToken = null
 let ephemeralKeyPair = null // CryptoKeyPair — private key never exported
-// The (PS, user) binding_key derived at bootstrap; persisted in localStorage
-// and used on /refresh to prove which (PS, user) pair we're holding
-// credentials for without exposing the raw identifiers again.
-let bindingKey = null
-let bindingPs = null
-let bindingSub = null
 
 // ── IndexedDB helpers for CryptoKey persistence ──
 
@@ -27,7 +21,7 @@ function openDB() {
 async function saveKeyPair(keyPair) {
   const db = await openDB()
   const tx = db.transaction(STORE_NAME, 'readwrite')
-  tx.objectStore(STORE_NAME).put(keyPair, 'ephemeral')
+  tx.objectStore(STORE_NAME).put(keyPair, 'durable')
   return new Promise((resolve, reject) => {
     tx.oncomplete = resolve
     tx.onerror = () => reject(tx.error)
@@ -37,7 +31,7 @@ async function saveKeyPair(keyPair) {
 async function loadKeyPair() {
   const db = await openDB()
   const tx = db.transaction(STORE_NAME, 'readonly')
-  const req = tx.objectStore(STORE_NAME).get('ephemeral')
+  const req = tx.objectStore(STORE_NAME).get('durable')
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result || null)
     req.onerror = () => reject(req.error)
@@ -47,13 +41,14 @@ async function loadKeyPair() {
 async function clearKeyPair() {
   const db = await openDB()
   const tx = db.transaction(STORE_NAME, 'readwrite')
-  tx.objectStore(STORE_NAME).delete('ephemeral')
+  tx.objectStore(STORE_NAME).delete('durable')
 }
 
-// Generate a fresh ephemeral Ed25519 key pair and persist it. The design
-// rotates this key on every bootstrap/refresh so the cnf binding in any
-// historical agent_token can't be reused against a rotated key.
-async function rotateEphemeralKeyPair() {
+// Generate a fresh durable Ed25519 key pair and persist it. Per the new
+// bootstrap protocol the agent's signing key is durable (not rotated on
+// refresh) — the same key sits in cnf.jwk across the agent's lifetime
+// at the AP, with refresh just minting fresh `exp` values.
+async function rotateKeyPair() {
   const keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
   ephemeralKeyPair = keyPair
   await saveKeyPair(keyPair)
@@ -78,7 +73,6 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;')
 }
 
-// Render an encoded JWT as <header>.<payload>.<signature> with each segment colored.
 function renderEncodedJWT(jwt) {
   const parts = String(jwt).split('.')
   if (parts.length < 2) return escapeHtml(jwt)
@@ -92,11 +86,9 @@ function renderEncodedJWT(jwt) {
   )
 }
 
-// Pretty-print a JS value as JSON with syntax-highlighted spans.
 function renderJSON(obj) {
   const json = JSON.stringify(obj, null, 2)
   if (json === undefined) return ''
-  // Escape HTML first so user-controlled strings can't inject markup.
   const safe = escapeHtml(json)
   return safe.replace(
     /(&quot;(?:\\.|(?!&quot;).)*&quot;)(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
@@ -112,106 +104,13 @@ function renderJSON(obj) {
   )
 }
 
-// ── WebAuthn helpers (used by bootstrap/refresh ceremonies) ──
-
-function base64urlToBuffer(str) {
-  const padded = str + '='.repeat((4 - (str.length % 4)) % 4)
-  const binary = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes.buffer
-}
-
-function bufferToBase64url(buffer) {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (const b of bytes) binary += String.fromCharCode(b)
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function parseCreationOptions(options) {
-  return {
-    ...options,
-    challenge: base64urlToBuffer(options.challenge),
-    user: {
-      ...options.user,
-      id: base64urlToBuffer(options.user.id),
-    },
-    excludeCredentials: (options.excludeCredentials || []).map(c => ({
-      ...c,
-      id: base64urlToBuffer(c.id),
-    })),
-  }
-}
-
-function parseRequestOptions(options) {
-  return {
-    ...options,
-    challenge: base64urlToBuffer(options.challenge),
-    allowCredentials: (options.allowCredentials || []).map(c => ({
-      ...c,
-      id: base64urlToBuffer(c.id),
-    })),
-  }
-}
-
-function serializeCredential(cred) {
-  return {
-    id: cred.id,
-    rawId: bufferToBase64url(cred.rawId),
-    type: cred.type,
-    response: {
-      clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
-      attestationObject: bufferToBase64url(cred.response.attestationObject),
-      transports: cred.response.getTransports?.() || [],
-    },
-    clientExtensionResults: cred.getClientExtensionResults(),
-    authenticatorAttachment: cred.authenticatorAttachment,
-  }
-}
-
-function serializeAssertion(cred) {
-  return {
-    id: cred.id,
-    rawId: bufferToBase64url(cred.rawId),
-    type: cred.type,
-    response: {
-      clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
-      authenticatorData: bufferToBase64url(cred.response.authenticatorData),
-      signature: bufferToBase64url(cred.response.signature),
-      userHandle: cred.response.userHandle ? bufferToBase64url(cred.response.userHandle) : null,
-    },
-    clientExtensionResults: cred.getClientExtensionResults(),
-    authenticatorAttachment: cred.authenticatorAttachment,
-  }
-}
-
-// Exposed for protocol.js (bundled file) to run the WebAuthn prompt itself.
-window.aauthWebAuthn = {
-  parseCreationOptions,
-  parseRequestOptions,
-  serializeCredential,
-  serializeAssertion,
-}
-
 // ── UI updates ──
-
-// Post-bootstrap state: hide the pre-bootstrap controls (Person Server
-// picker, Bootstrap agent button, intro copy) so a reloaded page doesn't
-// show the user an option they're already past. The Bootstrap fieldset
-// itself stays visible because it now hosts the inline Agent Identity
-// block + protocol log from the completed ceremony. Reset lives on the
-// Authorization Request fieldset.
 //
-// Scrolls to the Agent Identity card on first reveal so a post-OAuth
-// redirect-back lands the viewport on the next actionable block instead
-// of wherever the Bootstrap section happened to be.
-// Toggle post-bootstrap panels into the visible state. No scroll, no
-// auto-expand — callers decide when to do those:
-//   applyBootstrapResult (fresh-completion path) scrolls to Resource
-//     Request and opens the Agent Token details.
-//   restoreAgentTokenAndKey (page reload) does neither, so the user
-//     lands on the Bootstrap fieldset with tokens collapsed.
+// Post-bootstrap state: hide the pre-bootstrap controls (PS picker,
+// Bootstrap CTA) so a reloaded page doesn't show the user an option
+// they're already past. The Bootstrap fieldset itself stays visible
+// because it now hosts the inline Agent Identity block + protocol log
+// from the completed ceremony.
 function setAuthenticated(_label) {
   document.getElementById('bootstrap-controls')?.classList.add('hidden')
   document.getElementById('bootstrap-artifacts')?.classList.remove('hidden')
@@ -219,10 +118,6 @@ function setAuthenticated(_label) {
   document.getElementById('resource-section')?.classList.remove('hidden')
 }
 
-// Pre-bootstrap state: hide Agent Identity and Resource Request. Does
-// NOT toggle #bootstrap-controls — its visibility is managed explicitly
-// by callers (startBootstrap hides it on click; runBootstrap re-shows
-// on failure) so a re-bootstrap click never briefly re-exposes the CTA.
 function setUnauthenticated() {
   document.getElementById('bootstrap-section')?.classList.remove('hidden')
   document.getElementById('bootstrap-artifacts')?.classList.add('hidden')
@@ -232,13 +127,6 @@ function setUnauthenticated() {
 
 function displayAgentToken(data) {
   document.getElementById('agent-id').textContent = data.agent_id
-  // #agent-token-details / #decoded-payload-details are no longer
-  // surfaced — the verify step in the log now shows the raw response
-  // (bootstrap) or an inline formatToken (refresh), so a separate
-  // pinned copy of the token + decoded payload would just duplicate
-  // content the user already saw scroll past. Elements stay in the
-  // DOM (still populated below) purely as a copy-target safety net
-  // in case a future view wants to re-enable them.
   const raw = document.getElementById('agent-token-raw')
   if (raw) {
     raw.classList.add('encoded')
@@ -248,42 +136,6 @@ function displayAgentToken(data) {
   const payloadEl = document.getElementById('token-payload')
   if (payloadEl) payloadEl.innerHTML = renderJSON(payload)
 }
-
-// ── Binding state ──
-//
-// localStorage keys:
-//   aauth-binding-key — opaque SHA-256(ps_url + "|" + user_sub), used as
-//                       the refresh key. Matches the server's key.
-//   aauth-binding-ps  — display only (so user sees which PS they bound to)
-//   aauth-binding-sub — pairwise user_sub from bootstrap_token (opaque)
-
-function loadBinding() {
-  bindingKey = localStorage.getItem('aauth-binding-key')
-  bindingPs = localStorage.getItem('aauth-binding-ps')
-  bindingSub = localStorage.getItem('aauth-binding-sub')
-  return bindingKey ? { bindingKey, psUrl: bindingPs, userSub: bindingSub } : null
-}
-
-function saveBinding({ binding_key, ps_url, user_sub }) {
-  bindingKey = binding_key
-  bindingPs = ps_url
-  bindingSub = user_sub
-  localStorage.setItem('aauth-binding-key', binding_key)
-  localStorage.setItem('aauth-binding-ps', ps_url)
-  localStorage.setItem('aauth-binding-sub', user_sub)
-}
-
-function clearBinding() {
-  bindingKey = null
-  bindingPs = null
-  bindingSub = null
-  localStorage.removeItem('aauth-binding-key')
-  localStorage.removeItem('aauth-binding-ps')
-  localStorage.removeItem('aauth-binding-sub')
-}
-
-// Exposed for protocol.js
-window.aauthBinding = { loadBinding, saveBinding, clearBinding, get: () => ({ bindingKey, bindingPs, bindingSub }) }
 
 // Exposed so startBootstrap (in the bundled protocol.js) can reset the
 // Agent Identity + Authorization Request UI when a user clicks
@@ -296,10 +148,10 @@ window.aauthUI = { setAuthenticated, setUnauthenticated }
 function saveAgentToken(token) {
   agentToken = token
   localStorage.setItem('aauth-agent-token', token)
-  // Mirror the agent identity (aauth_sub) into its own key so the
-  // reload path can still populate #agent-id after the token itself
-  // has expired and been cleared — the binding survives, so the UI
-  // should keep showing the user's agent identity.
+  // Mirror the agent identity into its own key so the reload path can
+  // still populate #agent-id after the token itself has expired and
+  // been cleared — the durable key survives, so the UI should keep
+  // showing the user's agent identity.
   try {
     const payload = decodeJWTPayload(token)
     if (payload.sub) localStorage.setItem('aauth-agent-id', payload.sub)
@@ -316,15 +168,8 @@ async function restoreAgentTokenAndKey() {
   if (!savedToken) return false
 
   const payload = decodeJWTPayload(savedToken)
-  // Backfill the agent-id mirror key for sessions bootstrapped before
-  // saveAgentToken started writing it. Runs unconditionally so the
-  // else-if branch in the init IIFE can surface the identity even if
-  // we later drop the token below.
   if (payload.sub) localStorage.setItem('aauth-agent-id', payload.sub)
 
-  // Without an ephemeral key we can't sign /refresh/challenge either,
-  // so an expired-token + no-keypair state is truly unrecoverable.
-  // Clear and let the init IIFE drop to the pre-bootstrap CTA.
   const keyPair = await loadKeyPair()
   if (!keyPair) {
     clearAgentToken()
@@ -332,12 +177,9 @@ async function restoreAgentTokenAndKey() {
   }
 
   // Expired token + valid keypair: runRefresh (protocol.js) signs
-  // /refresh/challenge with the old ephemeral and passes the
-  // expired agent_token in Signature-Key; the server allows expired
-  // tokens on that endpoint specifically. Keeping the token in LS +
-  // hydrating globals lets startWhoami / startNotes fall through to
-  // runRefresh without hitting the "Cannot refresh" guard, which
-  // used to trigger any time the user returned after the 1h TTL.
+  // /refresh with the same hwk key the AP recorded by thumbprint, so
+  // even an expired token is fine to restore alongside the key — the
+  // refresh path doesn't read the token, it just signs the request.
   agentToken = savedToken
   ephemeralKeyPair = keyPair
   displayAgentToken({ agent_token: savedToken, agent_id: payload.sub })
@@ -345,10 +187,6 @@ async function restoreAgentTokenAndKey() {
 }
 
 // Applied by protocol.js after a successful bootstrap or refresh call.
-// Fresh-completion path: move Agent Token + Decoded Payload into the
-// bootstrap log's last section (open) so the toggle for that section
-// controls everything the ceremony produced, then scroll the viewport
-// to the Resource Request block (the next actionable step).
 function applyBootstrapResult(result) {
   saveAgentToken(result.agent_token)
   displayAgentToken({ agent_token: result.agent_token, agent_id: result.agent_id })
@@ -359,59 +197,28 @@ function applyBootstrapResult(result) {
 }
 window.aauthApplyBootstrapResult = applyBootstrapResult
 
-// Exposed for protocol.js to manage the ephemeral key.
-//
-// `rotate` is the simple case (bootstrap): generate + save + make current.
-//
-// `stage` / `commitStaged` splits that into two phases for /refresh: we
-// need to sign /refresh/challenge and /refresh/verify with the OLD
-// ephemeral (which matches agent_token.cnf), while also handing the
-// NEW public key to the server so the refreshed tokens bind to it.
-// Only after /refresh/verify succeeds do we promote the staged key.
-let stagedKeyPair = null
-
+// Exposed for protocol.js to manage the durable signing key. Refresh
+// reuses the same key (no rotation), so a single rotate/get/getPublicJwk
+// trio is all the surface area we need.
 window.aauthEphemeral = {
   rotate: async () => {
-    const kp = await rotateEphemeralKeyPair()
+    const kp = await rotateKeyPair()
     return {
       keyPair: kp,
       publicJwk: await crypto.subtle.exportKey('jwk', kp.publicKey),
     }
   },
-  stage: async () => {
-    const kp = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
-    stagedKeyPair = kp
-    return {
-      keyPair: kp,
-      publicJwk: await crypto.subtle.exportKey('jwk', kp.publicKey),
-    }
-  },
-  commitStaged: async () => {
-    if (!stagedKeyPair) return null
-    ephemeralKeyPair = stagedKeyPair
-    await saveKeyPair(stagedKeyPair)
-    stagedKeyPair = null
-    return ephemeralKeyPair
-  },
-  discardStaged: () => { stagedKeyPair = null },
   get: () => ephemeralKeyPair,
   getPublicJwk: async () => ephemeralKeyPair ? crypto.subtle.exportKey('jwk', ephemeralKeyPair.publicKey) : null,
 }
 
+// Signed fetch helper exposed for app.js (which can't import sigFetch
+// directly since it isn't bundled). Two modes:
+//   { jwt }  → sig=jwt;jwt=<jwt>, used with agent_token / auth_token
+//   { hwk: true } → sig=hwk, used with /bootstrap, /refresh, /agent/forget
+window.aauthSigFetch = null // populated by protocol.js after import
+
 // ── Scope picker hydration ──
-//
-// Two separate scope pickers, corresponding to the two scope axes:
-//
-// Identity scopes — requested at bootstrap. Granted claims come back as
-// named fields on the auth_token (name, email, ...). List hardcoded here
-// for now since the wallet PS doesn't publish scope descriptions.
-// TODO: when PS publishes scopes_supported with descriptions, hydrate
-// from {ps_origin}/.well-known/aauth-person.json instead.
-//
-// Resource scopes — requested at /authorize. End up in auth_token.scope
-// and gate what the agent can do at this resource. Hydrated from this
-// resource's /.well-known/aauth-resource.json so the UI never offers
-// something the server would reject.
 
 const IDENTITY_SCOPES = [
   { name: 'openid',      description: 'Verify your identity',            checked: true },
@@ -437,9 +244,6 @@ function renderScopeRow(scope, description, opts = {}) {
   return `<label class="checkbox-label" data-scope="${scope}"${title}><input type="checkbox" ${attrs.join(' ')}> <span>${scope}</span></label>`
 }
 
-// `profile` is shorthand for `name email picture`. When the user picks
-// one side, fade the other to hint the redundancy without disabling
-// either — they may still want to combine them explicitly.
 const PROFILE_CLAIMS = ['name', 'email', 'picture']
 
 function updateProfileImpliedOpacity() {
@@ -457,11 +261,6 @@ function updateProfileImpliedOpacity() {
   for (const claim of PROFILE_CLAIMS) set(claim, profileSelected)
 }
 
-// Identity scopes split into two visual columns:
-//   Standard scopes — OIDC-style claims the PS can release from its own record
-//   Hellō scopes    — linked-account scopes specific to Hellō's extended profile
-// getSelectedIdentityScopes() still queries `#identity-scope-grid input:checked`,
-// so the wrapping id stays intact; columns are sub-containers within it.
 const EXTENDED_SCOPE_NAMES = new Set(['discord', 'github', 'gitlab', 'twitter', 'ethereum'])
 
 function hydrateIdentityScopes() {
@@ -482,10 +281,6 @@ function hydrateIdentityScopes() {
   grid.innerHTML = renderCol('Standard scopes', standard) + renderCol('Hellō scopes', extended)
 }
 
-// Whoami URL preview — updates live as identity-scope checkboxes toggle
-// so the user sees exactly what GET the agent will sign and send. The
-// `whoami` resource scope is always present on the wire (the resource
-// requires it), so we don't surface it as a checkbox.
 const WHOAMI_ORIGIN = 'https://whoami.aauth.dev'
 window.WHOAMI_ORIGIN = WHOAMI_ORIGIN
 
@@ -503,19 +298,11 @@ function updateWhoamiUrlPreview() {
     ? `${WHOAMI_ORIGIN}/?scope=${encodeURIComponent(scopeParam)}`
     : `${WHOAMI_ORIGIN}/`
   el.textContent = url
-  // Zero-scope path: whoami returns just the agent's identity. Surface
-  // a caption so a viewer staring at a bare URL understands the call
-  // is intentional, not broken.
   document.getElementById('whoami-no-scopes-caption')
     ?.classList.toggle('hidden', scopes.length > 0)
 }
 window.updateWhoamiUrlPreview = updateWhoamiUrlPreview
 
-// Notes request-body preview — mirrors the JSON we'll POST to
-// notes.aauth.dev/authorize. Updates live as operation checkboxes toggle.
-// Checkboxes are injected by protocol.js after it fetches metadata +
-// openapi on first tab activation; until then the preview shows an
-// empty operations array.
 const NOTES_ORIGIN = 'https://notes.aauth.dev'
 const NOTES_VOCABULARY = 'urn:aauth:vocabulary:openapi'
 window.NOTES_ORIGIN = NOTES_ORIGIN
@@ -541,11 +328,8 @@ function updateNotesRequestPreview() {
 window.updateNotesRequestPreview = updateNotesRequestPreview
 
 // ── Settings persistence ──
-// Mirrors the playground.hello.dev pattern: one localStorage key holds all
-// user-customizable settings (PS selection, scopes, hints) as JSON.
 
 const SETTINGS_KEY = 'aauth-playground-settings'
-const HINT_FIELDS = ['login-hint', 'domain-hint', 'provider-hint', 'tenant']
 const DEFAULT_PS = 'https://person.hello-beta.net'
 
 function loadSettings() {
@@ -554,34 +338,11 @@ function loadSettings() {
     saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}
   } catch { /* ignore corrupt JSON */ }
 
-  // Restore identity scope checkboxes.
   if (Array.isArray(saved.identity_scopes)) {
     const set = new Set(saved.identity_scopes)
     const boxes = document.querySelectorAll('#identity-scope-grid input[type="checkbox"]')
     for (const b of boxes) {
       b.checked = set.has(b.value)
-    }
-  }
-
-  // Notes operations are saved here too, but the checkboxes don't exist
-  // until protocol.js fetches the OpenAPI on first tab activation.
-  // hydrateNotesOperations() reads saved.notes_operations via
-  // window.aauthGetSavedNotesOperations() and applies it after rendering.
-
-  // Restore hint inputs + their enable checkboxes. saved.hints is
-  // `{ [id]: string }` for values and saved.hints_enabled is `[id, ...]`
-  // for the enabled set.
-  if (saved.hints && typeof saved.hints === 'object') {
-    for (const f of HINT_FIELDS) {
-      const el = document.getElementById(f)
-      if (el && typeof saved.hints[f] === 'string') el.value = saved.hints[f]
-    }
-  }
-  if (Array.isArray(saved.hints_enabled)) {
-    const set = new Set(saved.hints_enabled)
-    for (const f of HINT_FIELDS) {
-      const cb = document.querySelector(`.hint-enable[data-hint-for="${f}"]`)
-      if (cb) cb.checked = set.has(f)
     }
   }
 }
@@ -591,9 +352,6 @@ function saveSettings() {
     document.querySelectorAll('#identity-scope-grid input[type="checkbox"]:checked')
   ).map(b => b.value)
 
-  // Read notes_operations if the checkboxes are mounted; otherwise
-  // preserve what's already stored so a save triggered from the whoami
-  // tab doesn't nuke a persisted notes selection.
   let notes_operations
   const notesBoxes = document.querySelectorAll('#notes-ops-grid input[type="checkbox"]')
   if (notesBoxes.length > 0) {
@@ -607,25 +365,12 @@ function saveSettings() {
     } catch { /* ignore corrupt JSON */ }
   }
 
-  const hints = {}
-  const hints_enabled = []
-  for (const f of HINT_FIELDS) {
-    const v = document.getElementById(f)?.value?.trim()
-    if (v) hints[f] = v
-    const cb = document.querySelector(`.hint-enable[data-hint-for="${f}"]`)
-    if (cb?.checked) hints_enabled.push(f)
-  }
-
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     identity_scopes,
     notes_operations,
-    hints,
-    hints_enabled,
   }))
 }
 
-// Exposed for protocol.js: read the persisted notes_operations list so
-// hydrateNotesOperations can restore checkbox state after rendering.
 window.aauthGetSavedNotesOperations = function aauthGetSavedNotesOperations() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}
@@ -633,17 +378,12 @@ window.aauthGetSavedNotesOperations = function aauthGetSavedNotesOperations() {
   } catch { return null }
 }
 
-// Returns the URL of the PS. The picker is fixed to a single server, so this
-// just returns the constant. Kept as a function + window export because
-// client/protocol.js (bundled) calls window.getCurrentPS().
 function getCurrentPS() {
   return DEFAULT_PS
 }
 window.getCurrentPS = getCurrentPS
 
 function wireSettingsAutosave() {
-  // Hints live in Bootstrap; scopes live in the Resource Request tabs.
-  // Watch both for any user edit and re-save.
   const roots = ['bootstrap-section', 'resource-section']
     .map((id) => document.getElementById(id))
     .filter(Boolean)
@@ -651,28 +391,18 @@ function wireSettingsAutosave() {
     root.addEventListener('change', saveSettings)
     root.addEventListener('input', saveSettings)
   }
-  // Scope toggles also update the URL preview live.
   document.getElementById('identity-scope-grid')
     ?.addEventListener('change', () => {
       updateWhoamiUrlPreview()
       updateProfileImpliedOpacity()
     })
 
-  // Notes operation toggles refresh the JSON body preview. Delegated on
-  // the grid container because checkboxes are injected dynamically after
-  // the OpenAPI fetch — the handler exists before the inputs do.
   document.getElementById('notes-ops-grid')
     ?.addEventListener('change', updateNotesRequestPreview)
 }
 
 // ── Initialization ──
 
-// Hydrate the identity scope picker BEFORE restoring saved selections —
-// loadSettings queries checkboxes by value, so they have to exist first.
-// Then wire autosave and paint the initial whoami URL preview. The
-// notes preview paints once on init too, with an empty operations array
-// until the user activates that tab and protocol.js hydrates the
-// checkboxes from the fetched OpenAPI.
 ;(async () => {
   hydrateIdentityScopes()
   loadSettings()
@@ -682,7 +412,6 @@ function wireSettingsAutosave() {
   updateNotesRequestPreview()
 })()
 
-// Copy button SVG icons — inlined for crisp rendering at any scale.
 const COPY_ICON_HTML = `
   <svg class="copy-icon-copy" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
   <svg class="copy-icon-check" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
@@ -695,13 +424,6 @@ function renderCopyIcons(root = document) {
 renderCopyIcons()
 new MutationObserver(() => renderCopyIcons()).observe(document.body, { childList: true, subtree: true })
 
-// bfcache (back-forward cache) restore: when the user clicks the
-// browser back button from the Person Server, the page is rehydrated
-// from its frozen pre-navigation DOM — no reload, no module re-run.
-// The Hellō Continue button they clicked on the way out still carries
-// the .hello-btn-loader spinner state we added on click, which now
-// reads as a stuck loader. Strip it so the button is clickable again
-// (or until the resume handlers replace its containing .interaction-box).
 window.addEventListener('pageshow', (e) => {
   if (!e.persisted) return
   for (const btn of document.querySelectorAll('.hello-btn-loader')) {
@@ -709,16 +431,6 @@ window.addEventListener('pageshow', (e) => {
   }
 })
 
-// Resource Request tab switcher — toggles .tab-active on the buttons
-// and the `hidden` attribute on each .tab-panel. On each activation we
-// fire window.aauthOnTabActivated(name) so protocol.js can trigger
-// tab-specific lazy setup (e.g. fetching notes metadata + openapi
-// the first time the notes tab is opened).
-//
-// Visibility of the Notes fieldset (#notes-section) is coupled to the
-// notes tab being active, but only when the user actually has a
-// notes auth_token — an empty notes box under an unauthorized tab
-// reads as a broken intermediate state.
 function activateResourceTab(name) {
   const section = document.getElementById('resource-section')
   const row = section?.querySelector('.tab-row')
@@ -733,10 +445,6 @@ function activateResourceTab(name) {
   for (const panel of section.querySelectorAll('.tab-panel')) {
     panel.hidden = panel.dataset.panel !== name
   }
-  // Couple Notes fieldset visibility to the notes tab in both
-  // directions — showing it while the whoami tab is active left the
-  // notes box orphaned under an unrelated form; hiding it on whoami
-  // keeps each tab paired with its matching downstream content.
   const notesSection = document.getElementById('notes-section')
   if (notesSection) {
     if (name === 'notes' && localStorage.getItem('aauth-notes-auth-token')) {
@@ -755,8 +463,6 @@ document.querySelector('#resource-section .tab-row')?.addEventListener('click', 
   activateResourceTab(tab.dataset.tab)
 })
 
-// Copy buttons — delegated. `data-copy` copies a literal string; `data-copy-target`
-// copies the textContent of the matched element. Toggles a 500ms "copied" state.
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('.copy-btn')
   if (!btn) return
@@ -776,47 +482,24 @@ document.addEventListener('click', (e) => {
   })
 })
 
-
-// Reset buttons — two-scope:
+// Reset buttons.
 //
-//   Bootstrap Reset — clears agent binding, tokens, keypair, WebAuthn
-//   linkage, agent name, and pending-bootstrap state (also tells the
-//   agent server to forget the binding). Next visit starts at the
-//   pre-bootstrap screen with a fresh passkey register.
+// Bootstrap Reset — clears the agent token, the durable signing key,
+//   and tells the AP to forget the (jkt, agent name) mapping so the
+//   next bootstrap mints a fresh local-part. (Best-effort: if the
+//   forget call fails the AP entry just expires on its own TTL.)
 //
-//   Authorization Reset — clears only scope selections, hints, and any
-//   pending-authorize state. Does not touch binding/token; re-requesting
-//   authorization reuses the same agent identity.
+// Authorization Reset — clears scope selections + cached auth tokens.
 document.getElementById('bootstrap-reset-btn')?.addEventListener('click', async () => {
-  // Tell the server to drop the (Person Server, user) binding so the next
-  // bootstrap runs the register path (new WebAuthn credential, new
-  // aauth_sub). If we don't have both a saved agent_token and the
-  // ephemeral that signs for it, skip the server call — client reset
-  // still happens, the server binding just stays until it's orphaned by
-  // expiry.
-  const savedBindingKey = localStorage.getItem('aauth-binding-key')
-  const savedAgentToken = localStorage.getItem('aauth-agent-token')
-  if (savedBindingKey && savedAgentToken && window.aauthSigFetch) {
+  if (window.aauthSigFetchHwk) {
     try {
-      await window.aauthSigFetch('/binding/forget', {
-        method: 'POST',
-        body: JSON.stringify({ binding_key: savedBindingKey }),
-        jwt: savedAgentToken,
-      })
+      await window.aauthSigFetchHwk('/agent/forget', { method: 'POST' })
     } catch { /* best-effort — still proceed with client reset */ }
   }
 
-  // Bootstrap-scoped localStorage keys. Scope selections + hints live in
-  // aauth-playground-settings and are preserved across a bootstrap reset.
-  // Any auth_token issued under the old binding is useless after reset
-  // (it names the previous aauth:local@host), so clear those too.
   const BOOTSTRAP_KEYS = [
-    'aauth-binding-key',
-    'aauth-binding-ps',
-    'aauth-binding-sub',
     'aauth-agent-token',
     'aauth-agent-id',
-    'aauth-pending-bootstrap',
     'aauth-pending-authorize',
     'aauth-notes-auth-token',
   ]
@@ -833,11 +516,6 @@ document.getElementById('reset-btn')?.addEventListener('click', () => {
   localStorage.removeItem('aauth-pending-authorize')
   localStorage.removeItem('aauth-pending-whoami')
   localStorage.removeItem('aauth-notes-auth-token')
-  // Resource Request fieldset-level reset wipes every downstream log —
-  // both ceremony logs (whoami + notes) and the per-operation Notes
-  // API log that lives inside the Notes fieldset. The Notes fieldset
-  // used to have its own Reset button scoped to just its state, but
-  // it read as redundant next to this one.
   window.aauthClearPersistedLog?.('whoami-log')
   window.aauthClearPersistedLog?.('notes-log')
   window.aauthClearPersistedLog?.('notes-api-log')
@@ -846,58 +524,27 @@ document.getElementById('reset-btn')?.addEventListener('click', () => {
 })
 
 ;(async () => {
-  loadBinding()
   const restored = await restoreAgentTokenAndKey()
-  // Persisted-log restore is kicked off by protocol.js at its own
-  // module-load time — doing it here would be a no-op on fresh loads
-  // (app.js runs before protocol.js, so window.aauthRestorePersistedLogs
-  // isn't defined yet on the IIFE's first synchronous pass, and the
-  // await resolves via microtask before protocol.js's task runs).
   if (restored) {
     const payload = decodeJWTPayload(agentToken)
     setAuthenticated(payload.sub)
-  } else if (bindingKey) {
-    // Binding exists but agent_token expired/missing. Identity comes
-    // from the mirror key saved alongside the token; if it's gone too
-    // (pre-fix sessions that aged past the 1h expiry) we have nothing
-    // to render — showing "Bootstrap complete" with a blank identity
-    // would be a lie. Drop the stale binding and let the user
-    // re-bootstrap from the default pre-bootstrap UI.
+  } else {
     const savedAgentId = localStorage.getItem('aauth-agent-id')
-    if (savedAgentId) {
+    const kp = await loadKeyPair()
+    if (savedAgentId && kp) {
+      // Token expired or missing, but durable key + identity survive.
+      // Show authenticated state — runRefresh will mint a fresh token
+      // on the next resource call.
+      ephemeralKeyPair = kp
       setAuthenticated(savedAgentId)
       document.getElementById('agent-id').textContent = savedAgentId
-    } else {
-      // Drop the stale binding and the persisted log (protocol.js
-      // already restored it at module-load, which un-hides
-      // #bootstrap-artifacts — leaving it visible would show a
-      // half-bootstrapped page). The log wrapper is re-hidden to
-      // match the default pre-bootstrap layout.
-      window.aauthBinding.clearBinding()
-      window.aauthClearAllPersistedLogs?.()
-      const log = document.getElementById('bootstrap-log')
-      if (log) {
-        log.innerHTML = ''
-        log.classList.add('hidden')
-      }
-      document.getElementById('bootstrap-artifacts')?.classList.add('hidden')
     }
-  } else if (localStorage.getItem('aauth-pending-bootstrap')) {
-    // First-bootstrap resume case: no agent_token exists yet, but the
-    // ephemeral key was saved to IndexedDB before the PS redirect. Load
-    // it so resumePendingInteraction can sign the /pending poll.
-    const kp = await loadKeyPair()
-    if (kp) ephemeralKeyPair = kp
   }
-  // Resume whichever pending flow the user left mid-interaction when they
-  // redirected to the PS. Bootstrap takes precedence (can't authorize
-  // without an agent_token anyway). Both are no-ops if no pending state
-  // is saved or it's gone stale.
-  window.resumePendingInteraction?.()
+  // Resume whichever pending authorize the user left mid-interaction
+  // when they redirected to the PS. No-op if no pending state.
   window.resumePendingAuthorize?.()
 
   // If a valid notes auth_token is still in localStorage, re-mount the
-  // Notes app without replaying the discovery/authorize flow. Expired
-  // or missing tokens leave the Notes fieldset hidden.
+  // Notes app without replaying the discovery/authorize flow.
   window.aauthRestoreNotesApp?.()
 })()

@@ -33,10 +33,14 @@ auto-deploy fails, the dashboard (Workers & Pages → playground-aauth-dev
 
 - Cloudflare Worker (`src/index.ts`, Hono) serves both static assets
   (from `public/`) and API routes.
+- Plays two roles per AAuth: agent provider (mints agent_tokens at
+  `/bootstrap`, `/refresh`) and resource (issues resource_tokens at
+  `/authorize`, gates `/api/demo`). Wears each hat at its own
+  well-known: `aauth-agent.json` and `aauth-resource.json`.
 - Client code is split: `public/app.js` (loaded directly, handles
   state/UI) and `client/protocol.js` (bundled by esbuild into
   `public/protocol.js`, handles the protocol flow).
-- KV namespace `WEBAUTHN_KV` stores WebAuthn challenges, sessions,
-  bindings, and short-lived transaction records.
+- KV namespace `WEBAUTHN_KV` stores the (jkt → agent local-part)
+  mapping the AP uses to assign stable agent identities.
 - Signing key is an Ed25519 JWK stored as the `SIGNING_KEY` Worker
   secret (generated via `npm run generate-key`).

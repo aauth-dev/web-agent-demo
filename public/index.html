@@ -69,13 +69,13 @@
       <button id="bootstrap-reset-btn" type="button" class="btn-outline section-reset" title="Clear agent binding, tokens, and WebAuthn linkage">Reset</button>
 
       <!--
-        Pre-bootstrap UI — intro, Person Server picker, hidden hints
-        inputs, and the Bootstrap agent button. Once bootstrapped this
-        whole block is hidden by setAuthenticated so the fieldset
-        collapses to just the protocol log + Agent Identity rows below.
+        Pre-bootstrap UI — Person Server picker (the PS that will be
+        named in the agent_token's `ps` claim) and the Bootstrap CTA.
+        No PS interaction happens here; the agent talks only to its
+        Agent Provider. The PS only enters the picture later, on the
+        first three-party flow when the user binds to the agent.
       -->
       <div id="bootstrap-controls">
-        <!-- No scopes are requested here; choose scopes at authorization. -->
         <div class="section-group">
           <div class="section-heading section-heading-static">
             <span>Person Server</span>
@@ -88,45 +88,8 @@
           </ul>
         </div>
 
-        <!--
-          OIDC-style routing hints sent with the PS /bootstrap call. Each row
-          has an enable checkbox so a user can keep a value parked in the
-          input but omit it from the request — getHints() in protocol.js
-          filters on .hint-enable[data-hint-for=<kebab id>] and sends only
-          checked rows. Hints live here (not on Authorization) because the
-          PS uses them at bootstrap to route to the right upstream IdP.
-        -->
-        <details class="section-group hidden">
-          <summary class="section-heading">
-            <span>Hints</span>
-            <svg class="section-chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
-          </summary>
-          <div class="hints-grid">
-            <label class="hint-row">
-              <input type="checkbox" class="hint-enable" data-hint-for="login-hint">
-              <span class="hint-name">login_hint</span>
-              <input type="text" id="login-hint" placeholder="user@example.com">
-            </label>
-            <label class="hint-row">
-              <input type="checkbox" class="hint-enable" data-hint-for="domain-hint">
-              <span class="hint-name">domain_hint</span>
-              <input type="text" id="domain-hint" placeholder="example.com">
-            </label>
-            <label class="hint-row">
-              <input type="checkbox" class="hint-enable" data-hint-for="provider-hint">
-              <span class="hint-name">provider_hint</span>
-              <input type="text" id="provider-hint" placeholder="github">
-            </label>
-            <label class="hint-row">
-              <input type="checkbox" class="hint-enable" data-hint-for="tenant">
-              <span class="hint-name">tenant</span>
-              <input type="text" id="tenant" placeholder="ten_xxx_xxx">
-            </label>
-          </div>
-        </details>
-
         <div class="authz-actions">
-          <button id="bootstrap-btn" type="button" class="hello-btn hello-btn-black-on-dark">ō&nbsp;&nbsp;&nbsp;Bootstrap with Hellō</button>
+          <button id="bootstrap-btn" type="button" class="hello-btn hello-btn-black-on-dark">Bootstrap agent</button>
         </div>
       </div>
 

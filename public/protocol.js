@@ -2829,10 +2829,9 @@
 
   // public/log-text.json
   var log_text_default = {
-    _about: "Single source of truth for every label + description rendered into the protocol log. Templates use {placeholder} for dynamic values substituted at runtime. All references to the agent server are spelled 'Agent Server' (not 'AS') to avoid conflation with 'Access Server' elsewhere in the AAuth protocol. The person server is spelled 'Person Server' everywhere (including terse HTTP lines) for consistency.",
+    _about: "Single source of truth for every label + description rendered into the protocol log. Templates use {placeholder} for dynamic values substituted at runtime. The agent provider is spelled 'Agent Provider' (not 'AP') to avoid conflation with 'Access Server'. The person server is spelled 'Person Server' everywhere for consistency.",
     sections: {
       bootstrap: "Bootstrap",
-      bootstrap_resumed: "Bootstrap (resumed)",
       refresh: "Refresh",
       whoami: "Whoami",
       whoami_resumed: "Whoami (resumed)",
@@ -2842,126 +2841,38 @@
     },
     bootstrap: {
       generate_ephemeral: {
-        label: "Agent: generate ephemeral key",
-        description: "The agent creates a fresh signing keypair for this session. The private half never leaves this device, so tokens issued later are useless to anyone else."
+        label: "Agent: generate signing key",
+        description: "The agent creates a fresh signing keypair. The private half never leaves this device, so tokens issued later are useless to anyone else."
       },
-      ps_discovery_request: {
-        label_template: "Agent \u2192 Person Server: GET {path}",
-        label_resolved_template: "Agent \u2192 Person Server: GET {path}",
-        label_error_network_template: "Agent \u2192 Person Server: GET {path} (network error)",
-        description: "Before the agent can talk to your Person Server, it asks which URLs to use for bootstrap and for sending you to consent."
-      },
-      ps_bootstrap_request: {
-        label_template: "Agent \u2192 Person Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Person Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Person Server: POST {path} (network error)",
-        label_error_unexpected_template: "Agent \u2192 Person Server: POST {path} (unexpected)",
-        description: "The agent tells your Person Server a new agent wants to connect. The Person Server replies with a URL to show you for approval, plus one the agent can check for your decision."
-      },
-      ps_pending_longpoll: {
-        label_template: "Agent \u2192 Person Server: GET {path} (long-poll)",
-        label_resolved_template: "Agent \u2192 Person Server: GET {path}",
-        label_resolved_no_token_template: "Agent \u2192 Person Server: GET {path} (no bootstrap_token)",
-        description: "The agent keeps one request open while you decide, instead of polling every second. The Person Server answers the moment you approve or deny."
-      },
-      ps_consent_prompt: {
-        label: "User at Person Server: consent prompt",
-        description: "Your Person Server asks if you trust this agent. Approve here on this device, or scan the QR to approve on another.",
-        label_resolved_success: "User Consent Completed",
-        label_resolved_denied: "Consent Denied",
-        label_resolved_timed_out: "Consent Timed Out",
-        label_resolved_no_token: "Pending returned no bootstrap_token"
-      },
-      ps_bootstrap_token_received: {
-        label: "Person Server response: bootstrap_token received",
-        description: "Once you approve, the Person Server hands the agent a short-lived, single-use ticket proving you said yes \u2014 the agent redeems it with its own Agent Server next."
-      },
-      ps_pending_bad_response: {
-        label: "Bad /pending response",
-        description: "The Person Server replied in a shape the agent didn't expect, so the bootstrap can't continue."
-      },
-      ps_user_denied: {
-        label: "User denied consent",
-        description: ""
-      },
-      ps_interaction_timed_out: {
-        label: "Interaction timed out",
-        description: "You didn't approve or deny in time, so the Person Server gave up waiting."
-      },
-      agent_server_challenge_request: {
-        label_template: "Agent \u2192 Agent Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Server: POST {path} (network error)",
-        description: "The agent shows the Person Server's ticket to its Agent Server, which asks for a WebAuthn ceremony to confirm a real human is here."
-      },
-      webauthn_ceremony_failed: {
-        label: "WebAuthn ceremony failed",
-        description: "The WebAuthn step didn't complete \u2014 likely cancelled, timed out, or the credential wasn't accepted."
-      },
-      webauthn_ceremony_success: {
-        label: "User at Browser: WebAuthn ceremony",
-        description: "You complete the WebAuthn ceremony to sign the challenge, proving a human is present and the right credential is on this device."
-      },
-      agent_server_verify_request: {
-        label_template: "Agent \u2192 Agent Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Server: POST {path} (network error)",
-        description: "The Agent Server verifies your WebAuthn response and remembers the pairing of you, this Person Server, and this device \u2014 so future refreshes skip the Person Server."
-      },
-      ps_announce_request: {
-        label_template: "Agent \u2192 Person Server: POST {path} (announce)",
-        label_resolved_template: "Agent \u2192 Person Server: POST {path} (announce)",
-        label_error_network_template: "Agent \u2192 Person Server: POST {path} (announce, network error)",
-        description: "The agent posts an empty, agent_token-signed request back to the Person Server so the PS can bind the new aauth:local@domain agent identifier to your user record."
-      }
-    },
-    bootstrap_resumed: {
-      ps_consent_prompt: {
-        label: "User at Person Server: consent prompt (resumed)",
-        label_redirected: "Redirected to Person Server for consent",
-        description: "You returned mid-approval (page reload or redirect back from the Person Server). The agent picks up the same pending request instead of starting over."
+      agent_provider_request: {
+        label_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        description: "The agent posts to the Agent Provider's bootstrap endpoint with a sig=hwk request \u2014 its public key is in the Signature-Key header, and the body names the Person Server the user picked. The Agent Provider records the (key thumbprint \u2192 agent name) mapping in its KV and returns an agent_token bound to the key."
       }
     },
     refresh: {
       cannot_refresh: {
         label: "Cannot refresh",
-        description: "No saved key + token pair on this device, so there's nothing to refresh \u2014 a full bootstrap is needed."
+        description: "No saved key on this device, so there's nothing to refresh \u2014 a fresh bootstrap is needed."
       },
-      stage_new_ephemeral: {
-        label: "Agent: stage new ephemeral key",
-        description: "The agent prepares a fresh keypair but doesn't use it yet. If the refresh fails for any reason, the old key and token still work."
-      },
-      agent_server_refresh_challenge_request: {
-        label_template: "Agent \u2192 Agent Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Server: POST {path} (network error)",
-        description: "The agent asks its Agent Server for a WebAuthn challenge, signed with the old key so the server knows it's the same agent as before."
-      },
-      webauthn_assertion_failed: {
-        label: "WebAuthn assertion failed",
-        description: "The WebAuthn step didn't complete \u2014 likely cancelled, timed out, or the credential wasn't accepted."
-      },
-      webauthn_ceremony_success: {
-        label: "User at Browser: WebAuthn ceremony",
-        description: "You complete the WebAuthn ceremony to sign the refresh challenge, proving the same human is still here on this device."
-      },
-      agent_server_refresh_verify_request: {
-        label_template: "Agent \u2192 Agent Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Server: POST {path} (network error)",
-        description: "The Agent Server verifies your response, swaps in the new key, and issues a fresh agent token \u2014 no trip back to your Person Server needed."
+      agent_provider_request: {
+        label_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        description: "The agent signs a refresh request with the same hwk key the Agent Provider already has on file. The Agent Provider looks up the agent name by thumbprint and mints a fresh agent_token bound to the same key."
       }
     },
     authorize: {
       missing_context: {
-        label: "Missing agent_token or ephemeral key",
-        description: "The agent doesn't have an agent token or key yet \u2014 bootstrap has to finish first."
+        label: "Missing agent_token or signing key",
+        description: "The agent doesn't have an agent_token or key yet \u2014 bootstrap has to finish first."
       },
-      agent_server_authorize_request: {
-        label_template: "Agent \u2192 Agent Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Server: POST {path} (network error)",
-        description: "The agent asks its Agent Server for a resource token scoped to this Person Server and resource. The Agent Server signs it on the agent's behalf."
+      agent_provider_authorize_request: {
+        label_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
+        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        description: "The agent asks its Agent Provider for a resource token scoped to this Person Server and resource. The Agent Provider signs it on the agent's behalf."
       },
       ps_token_request: {
         label_template: "Agent \u2192 Person Server: POST {path}",
@@ -2976,7 +2887,7 @@
       },
       ps_consent_prompt: {
         label: "User at Person Server: consent prompt",
-        description: "Your Person Server asks if this agent may use the new scope. Approve here, or scan the QR to approve on another device.",
+        description: "Your Person Server asks if this agent may use the requested scope. Approve here, or scan the QR to approve on another device.",
         label_resolved_success: "Interaction Completed",
         label_resolved_denied: "Interaction Denied",
         label_resolved_timed_out: "Interaction Timed Out"
@@ -3123,9 +3034,8 @@
     ui: {
       another_request_button: "Another Authorization Request",
       approve_at_ps: {
-        bootstrap_heading: "Approve this agent",
         authorize_heading: "Approve this authorization request",
-        continue_label: "Continue at your Person Server to approve this agent",
+        continue_label: "Continue at your Person Server to approve this request",
         or_another_device: "OR scan QR code",
         copy_link_default: "Copy link",
         copy_link_copied: "Copied!"
@@ -3163,15 +3073,9 @@
     } catch {
     }
   });
-  function trace(label, extra) {
-    try {
-      console.log(`[aauth] ${label}`, extra ?? "");
-    } catch {
-    }
-  }
   window.aauthSigFetch = async function aauthSigFetch(url, { method = "GET", headers = {}, body, jwt } = {}) {
     const keyPair = window.aauthEphemeral.get();
-    if (!keyPair) throw new Error("no ephemeral key available to sign with");
+    if (!keyPair) throw new Error("no signing key available");
     if (!jwt) throw new Error("jwt required for sig=jwt scheme");
     const signingKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
     const hasBody = body !== void 0 && body !== null;
@@ -3184,6 +3088,23 @@
       signingKey,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: "jwt", jwt },
+      components
+    });
+  };
+  window.aauthSigFetchHwk = async function aauthSigFetchHwk(url, { method = "POST", headers = {}, body } = {}) {
+    const keyPair = window.aauthEphemeral.get();
+    if (!keyPair) throw new Error("no signing key available");
+    const signingKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    const hasBody = body !== void 0 && body !== null;
+    const components = hasBody ? ["@method", "@authority", "@path", "content-type", "signature-key"] : ["@method", "@authority", "@path", "signature-key"];
+    const mergedHeaders = hasBody ? { "Content-Type": "application/json", ...headers } : { ...headers };
+    return (0, import_httpsig.fetch)(url, {
+      method,
+      headers: mergedHeaders,
+      body: hasBody ? body : void 0,
+      signingKey,
+      signingCryptoKey: keyPair.privateKey,
+      signatureKey: { type: "hwk" },
       components
     });
   };
@@ -3372,15 +3293,6 @@ ${renderJSON(body)}`;
     }
     return `<div class="token-label">Response</div>${tokenWrap(inner)}`;
   }
-  function formatToken(label, token, decoded) {
-    return `
-    <details class="section-group">
-      <summary class="section-heading"><span>${escapeHtml(label)}</span>${CHEVRON_SVG}</summary>
-      ${tokenWrap(renderEncodedJWT(token), "encoded")}
-    </details>
-    ${formatDecoded(decoded)}
-  `;
-  }
   function formatDecoded(decoded) {
     return `
     <details class="section-group" open>
@@ -3403,20 +3315,9 @@ ${renderJSON(body)}`;
     return Array.from(checkboxes).map((cb) => cb.value).join(" ");
   }
   function getHints() {
-    const hints = {};
-    const fields = ["login-hint", "domain-hint", "provider-hint", "tenant"];
-    for (const field of fields) {
-      const enabled = document.querySelector(`.hint-enable[data-hint-for="${field}"]`)?.checked;
-      if (!enabled) continue;
-      const val = document.getElementById(field)?.value?.trim();
-      if (val) {
-        hints[field.replace("-", "_")] = val;
-      }
-    }
-    return hints;
+    return {};
   }
-  async function runBootstrap(psUrl, hints) {
-    const agentServerOrigin = window.location.origin;
+  async function runBootstrap(psUrl) {
     addLogSection(copy("sections.bootstrap"));
     const { keyPair, publicJwk } = await window.aauthEphemeral.rotate();
     addLogStep(
@@ -3424,384 +3325,49 @@ ${renderJSON(body)}`;
       "success",
       desc("bootstrap.generate_ephemeral") + tokenWrap(renderJSON({ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x }))
     );
-    const psMetadataUrl = `${psUrl.replace(/\/$/, "")}/.well-known/aauth-person.json`;
-    const psMetaStep = addLogStep(
-      fmt(copy("bootstrap.ps_discovery_request.label_template"), { path: new URL(psMetadataUrl).pathname }),
+    const endpoint = `${window.location.origin}/bootstrap`;
+    const body = { ps: psUrl };
+    const reqStep = addLogStep(
+      fmt(copy("bootstrap.agent_provider_request.label_template"), { path: "/bootstrap" }),
       "pending",
-      desc("bootstrap.ps_discovery_request") + formatRequest("GET", psMetadataUrl, null, null)
-    );
-    let psMetadata;
-    try {
-      const psMetaRes = await fetch(psMetadataUrl);
-      psMetadata = await psMetaRes.json();
-      if (!psMetaRes.ok) {
-        resolveStep(psMetaStep, "error", fmt(copy("bootstrap.ps_discovery_request.label_resolved_template"), { path: new URL(psMetadataUrl).pathname, status: psMetaRes.status }));
-        appendStepBody(psMetaStep, formatResponse(psMetaRes.status, null, psMetadata));
-        return false;
-      }
-      resolveStep(psMetaStep, "success", fmt(copy("bootstrap.ps_discovery_request.label_resolved_template"), { path: new URL(psMetadataUrl).pathname, status: 200 }));
-      appendStepBody(psMetaStep, formatResponse(200, null, psMetadata));
-    } catch (err) {
-      resolveStep(psMetaStep, "error", fmt(copy("bootstrap.ps_discovery_request.label_error_network_template"), { path: new URL(psMetadataUrl).pathname }));
-      appendStepBody(psMetaStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      return false;
-    }
-    const bootstrapEndpoint = psMetadata.bootstrap_endpoint || `${psUrl.replace(/\/$/, "")}/bootstrap`;
-    const psBootstrapBody = {
-      agent_server: agentServerOrigin,
-      // Force the consent screen on every bootstrap so the demo flow shows
-      // the full UX even after a user has already bound an agent server.
-      // Without this the PS silently re-mints from its live thumbprint
-      // session (1h TTL) and the consent page never renders.
-      prompt: "consent",
-      ...hints,
-      provider_hint: "email--"
-    };
-    const psBootReqStep = addLogStep(
-      fmt(copy("bootstrap.ps_bootstrap_request.label_template"), { path: new URL(bootstrapEndpoint).pathname }),
-      "pending",
-      desc("bootstrap.ps_bootstrap_request") + formatRequest("POST", bootstrapEndpoint, {
+      desc("bootstrap.agent_provider_request") + formatRequest("POST", endpoint, {
         "Content-Type": "application/json",
         "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
         "Signature": "sig=:...:",
         "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
-      }, psBootstrapBody)
+      }, body)
     );
-    let psBootRes, psBootBody, pollUrl, interactionParams, responseHeaders = {};
+    let result;
     try {
-      psBootRes = await (0, import_httpsig.fetch)(bootstrapEndpoint, {
+      const res = await (0, import_httpsig.fetch)(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(psBootstrapBody),
+        body: JSON.stringify(body),
         signingKey: publicJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "hwk" },
         components: ["@method", "@authority", "@path", "content-type", "signature-key"]
       });
-      for (const key of ["location", "retry-after", "aauth-requirement"]) {
-        const v = psBootRes.headers.get(key);
-        if (v) responseHeaders[key] = v;
-      }
-      try {
-        psBootBody = await psBootRes.json();
-      } catch {
-        psBootBody = null;
-      }
-      pollUrl = psBootRes.headers.get("location") || psBootBody?.location || psBootBody?.pending_url;
-      const reqHeader = psBootRes.headers.get("aauth-requirement") || "";
-      const fromHeader = parseInteractionHeader(reqHeader);
-      interactionParams = {
-        requirement: fromHeader.requirement || psBootBody?.requirement,
-        code: fromHeader.code || psBootBody?.code,
-        url: fromHeader.url || psMetadata.interaction_endpoint || psBootBody?.interaction_url
-      };
-      const reqStatus = psBootRes.ok ? "success" : "error";
-      resolveStep(psBootReqStep, reqStatus, fmt(copy("bootstrap.ps_bootstrap_request.label_resolved_template"), { path: new URL(bootstrapEndpoint).pathname, status: psBootRes.status }));
-      appendStepBody(psBootReqStep, formatResponse(psBootRes.status, responseHeaders, psBootBody));
-    } catch (err) {
-      resolveStep(psBootReqStep, "error", fmt(copy("bootstrap.ps_bootstrap_request.label_error_network_template"), { path: new URL(bootstrapEndpoint).pathname }));
-      appendStepBody(psBootReqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      return false;
-    }
-    if (psBootRes.status !== 202 || !pollUrl) {
-      resolveStep(psBootReqStep, "error", fmt(copy("bootstrap.ps_bootstrap_request.label_error_unexpected_template"), { path: new URL(bootstrapEndpoint).pathname, status: psBootRes.status }));
-      return false;
-    }
-    const absolutePollUrl = new URL(pollUrl, bootstrapEndpoint).href;
-    const pollPath = new URL(absolutePollUrl).pathname;
-    const pollStep = addLogStep(
-      fmt(copy("bootstrap.ps_pending_longpoll.label_template"), { path: pollPath }),
-      "pending",
-      desc("bootstrap.ps_pending_longpoll") + formatRequest("GET", absolutePollUrl, {
-        "Prefer": `wait=${POLL_WAIT_SECONDS}`,
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
-      }, null)
-    );
-    if (pollStep) {
-      pollStep.dataset.pollKey = "bootstrap";
-      persistActiveLog();
-    }
-    const consentStep = addLogStep(
-      copy("bootstrap.ps_consent_prompt.label"),
-      "pending",
-      desc("bootstrap.ps_consent_prompt") + `<div class="interaction-box interaction-box-centered"><p class="interaction-heading">Redirecting to Person Server for consent\u2026</p></div>`
-    );
-    if (consentStep) {
-      consentStep.dataset.consentKey = "bootstrap";
-      persistActiveLog();
-    }
-    savePendingBootstrap({
-      pollUrl: absolutePollUrl,
-      bootstrapEndpoint,
-      psUrl
-    });
-    if (interactionParams.url && interactionParams.code) {
-      const callbackUrl = `${window.location.origin}/`;
-      const sameDeviceUrl = `${interactionParams.url}?code=${encodeURIComponent(interactionParams.code)}&callback=${encodeURIComponent(callbackUrl)}`;
-      window.location.href = sameDeviceUrl;
-      return true;
-    }
-    addLogStep(
-      "Person Server returned no interaction URL",
-      "error",
-      "<p>Bootstrap cannot continue \u2014 PS response lacks interaction_endpoint and aauth-requirement url.</p>"
-    );
-    return false;
-  }
-  var _bootstrapPollRunning = false;
-  async function pollForBootstrapToken(absolutePollUrl, keyPair, publicJwk, interactionStep, pollStep) {
-    if (_bootstrapPollRunning) return null;
-    _bootstrapPollRunning = true;
-    try {
-      return await _pollForBootstrapTokenImpl(absolutePollUrl, keyPair, publicJwk, interactionStep, pollStep);
-    } finally {
-      _bootstrapPollRunning = false;
-    }
-  }
-  async function _pollForBootstrapTokenImpl(absolutePollUrl, keyPair, publicJwk, interactionStep, pollStep) {
-    const pollPath = new URL(absolutePollUrl).pathname;
-    if (!pollStep) {
-      pollStep = addLogStep(
-        fmt(copy("bootstrap.ps_pending_longpoll.label_template"), { path: pollPath }),
-        "pending",
-        `<p>Agent waits for consent; <code>Prefer: wait=${POLL_WAIT_SECONDS}</code> holds the connection open so the PS can push state immediately instead of tight polling.</p>` + formatRequest("GET", absolutePollUrl, {
-          "Prefer": `wait=${POLL_WAIT_SECONDS}`,
-          "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-          "Signature": "sig=:...:",
-          "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
-        }, null)
-      );
-    }
-    while (true) {
-      try {
-        const res = await (0, import_httpsig.fetch)(absolutePollUrl, {
-          method: "GET",
-          headers: { Prefer: `wait=${POLL_WAIT_SECONDS}` },
-          signingKey: publicJwk,
-          signingCryptoKey: keyPair.privateKey,
-          signatureKey: { type: "hwk" },
-          components: ["@method", "@authority", "@path", "signature-key"]
-        });
-        if (res.status === 200) {
-          trace("poll 200 received");
-          clearPendingBootstrap();
-          const body = await res.json().catch(() => null);
-          const token = body?.bootstrap_token;
-          if (!token) {
-            trace("poll 200 missing bootstrap_token", body);
-            resolveStep(pollStep, "error", fmt(copy("bootstrap.ps_pending_longpoll.label_resolved_no_token_template"), { path: pollPath }));
-            resolveStep(interactionStep, "error", "Pending returned no bootstrap_token");
-            addLogStep(copy("bootstrap.ps_pending_bad_response.label"), "error", desc("bootstrap.ps_pending_bad_response") + formatResponse(200, null, body));
-            return null;
-          }
-          trace("poll token extracted, length", token.length);
-          resolveStep(pollStep, "success", fmt(copy("bootstrap.ps_pending_longpoll.label_resolved_template"), { path: pollPath, status: 200 }));
-          appendStepBody(pollStep, formatResponse(200, null, body));
-          appendStepBody(pollStep, formatDecoded(decodeJWTPayloadBrowser(token)));
-          resolveStep(interactionStep, "success", "User Consent Completed");
-          return { bootstrap_token: token, raw: body };
-        }
-        if (res.status === 403) {
-          clearPendingBootstrap();
-          resolveStep(pollStep, "error", fmt(copy("bootstrap.ps_pending_longpoll.label_resolved_template"), { path: pollPath, status: 403 }));
-          resolveStep(interactionStep, "error", "Consent Denied");
-          addLogStep(
-            copy("bootstrap.ps_user_denied.label"),
-            "error",
-            formatResponse(403, null, await res.json().catch(() => null))
-          );
-          return null;
-        }
-        if (res.status === 404) {
-          clearPendingBootstrap();
-          resolveStep(pollStep, "error", fmt(copy("bootstrap.ps_pending_longpoll.label_resolved_template"), { path: pollPath, status: 404 }));
-          resolveStep(interactionStep, "error", "Interaction Expired");
-          addLogStep(
-            "Interaction expired",
-            "error",
-            formatResponse(404, null, await res.json().catch(() => null))
-          );
-          return null;
-        }
-        if (res.status === 408) {
-          clearPendingBootstrap();
-          resolveStep(pollStep, "error", fmt(copy("bootstrap.ps_pending_longpoll.label_resolved_template"), { path: pollPath, status: 408 }));
-          resolveStep(interactionStep, "error", "Consent Timed Out");
-          addLogStep(
-            copy("bootstrap.ps_interaction_timed_out.label"),
-            "error",
-            desc("bootstrap.ps_interaction_timed_out") + formatResponse(408, null, null)
-          );
-          return null;
-        }
-      } catch (err) {
-        console.log("Bootstrap poll error:", err.message);
-        await new Promise((r) => setTimeout(r, 5e3));
-      }
-    }
-  }
-  async function completeAgentServerBootstrap(bootstrapToken, publicJwk, keyPair, ctx = {}) {
-    trace("completeAgentServerBootstrap entered");
-    clearPendingBootstrap();
-    const challengeEndpoint = `${window.location.origin}/bootstrap/challenge`;
-    const challengeReqStep = addLogStep(
-      fmt(copy("bootstrap.agent_server_challenge_request.label_template"), { path: new URL(challengeEndpoint).pathname }),
-      "pending",
-      desc("bootstrap.agent_server_challenge_request") + formatRequest("POST", challengeEndpoint, {
-        "Content-Length": "0",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${bootstrapToken.substring(0, 20)}..."`
-      }, null)
-    );
-    let challengeData;
-    try {
-      const res = await (0, import_httpsig.fetch)(challengeEndpoint, {
-        method: "POST",
-        signingKey: publicJwk,
-        signingCryptoKey: keyPair.privateKey,
-        signatureKey: { type: "jwt", jwt: bootstrapToken },
-        components: ["@method", "@authority", "@path", "signature-key"]
-      });
-      challengeData = await res.json();
-      if (!res.ok) {
-        resolveStep(challengeReqStep, "error", fmt(copy("bootstrap.agent_server_challenge_request.label_resolved_template"), { path: "/bootstrap/challenge", status: res.status }));
-        appendStepBody(challengeReqStep, formatResponse(res.status, null, challengeData));
+      result = await res.json().catch(() => null);
+      if (!res.ok || !result?.agent_token) {
+        resolveStep(reqStep, "error", fmt(copy("bootstrap.agent_provider_request.label_resolved_template"), { path: "/bootstrap" }) + ` \u2192 ${res.status}`);
+        appendStepBody(reqStep, formatResponse(res.status, null, result));
         return false;
       }
-      resolveStep(challengeReqStep, "success", fmt(copy("bootstrap.agent_server_challenge_request.label_resolved_template"), { path: "/bootstrap/challenge", status: 200 }));
-      appendStepBody(challengeReqStep, formatResponse(200, null, challengeData));
+      resolveStep(reqStep, "success", fmt(copy("bootstrap.agent_provider_request.label_resolved_template"), { path: "/bootstrap" }) + ` \u2192 ${res.status}`);
+      appendStepBody(reqStep, formatResponse(res.status, null, result));
+      appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token)));
     } catch (err) {
-      resolveStep(challengeReqStep, "error", fmt(copy("bootstrap.agent_server_challenge_request.label_error_network_template"), { path: "/bootstrap/challenge" }));
-      appendStepBody(challengeReqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
+      resolveStep(reqStep, "error", fmt(copy("bootstrap.agent_provider_request.label_error_network_template"), { path: "/bootstrap" }));
+      appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
       return false;
     }
-    let webauthnResponse;
-    try {
-      const opts = challengeData.webauthn_options;
-      if (challengeData.webauthn_type === "register") {
-        const parsed = window.aauthWebAuthn.parseCreationOptions(opts);
-        const cred = await navigator.credentials.create({ publicKey: parsed });
-        webauthnResponse = window.aauthWebAuthn.serializeCredential(cred);
-      } else {
-        const parsed = window.aauthWebAuthn.parseRequestOptions(opts);
-        const cred = await navigator.credentials.get({ publicKey: parsed });
-        webauthnResponse = window.aauthWebAuthn.serializeAssertion(cred);
-      }
-    } catch (err) {
-      addLogStep(
-        copy("bootstrap.webauthn_ceremony_failed.label"),
-        "error",
-        desc("bootstrap.webauthn_ceremony_failed") + `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`
-      );
-      return false;
-    }
-    addLogStep(copy("bootstrap.webauthn_ceremony_success.label"), "success", "");
-    const verifyEndpoint = `${window.location.origin}/bootstrap/verify`;
-    const verifyBody = {
-      bootstrap_tx_id: challengeData.bootstrap_tx_id,
-      webauthn_response: webauthnResponse
-    };
-    const verifyStep = addLogStep(
-      fmt(copy("bootstrap.agent_server_verify_request.label_template"), { path: new URL(verifyEndpoint).pathname }),
-      "pending",
-      desc("bootstrap.agent_server_verify_request") + formatRequest("POST", verifyEndpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${bootstrapToken.substring(0, 20)}..."`
-      }, {
-        bootstrap_tx_id: challengeData.bootstrap_tx_id,
-        webauthn_response: "(credential)"
-      })
-    );
-    let result;
-    try {
-      const res = await (0, import_httpsig.fetch)(verifyEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(verifyBody),
-        signingKey: publicJwk,
-        signingCryptoKey: keyPair.privateKey,
-        signatureKey: { type: "jwt", jwt: bootstrapToken },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"]
-      });
-      result = await res.json();
-      if (!res.ok) {
-        resolveStep(verifyStep, "error", fmt(copy("bootstrap.agent_server_verify_request.label_resolved_template"), { path: "/bootstrap/verify", status: res.status }));
-        appendStepBody(verifyStep, formatResponse(res.status, null, result));
-        return false;
-      }
-      resolveStep(verifyStep, "success", fmt(copy("bootstrap.agent_server_verify_request.label_resolved_template"), { path: "/bootstrap/verify", status: 200 }));
-      appendStepBody(verifyStep, formatResponse(200, null, result));
-      if (result?.agent_token) {
-        appendStepBody(verifyStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token)));
-      }
-    } catch (err) {
-      resolveStep(verifyStep, "error", fmt(copy("bootstrap.agent_server_verify_request.label_error_network_template"), { path: "/bootstrap/verify" }));
-      appendStepBody(verifyStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      return false;
-    }
-    const bootstrapPayload = decodeJWTPayloadBrowser(bootstrapToken) || {};
-    const bindingKey = await deriveBindingKeyBrowser(result.ps, bootstrapPayload.sub || "");
-    window.aauthBinding.saveBinding({
-      binding_key: bindingKey,
-      ps_url: result.ps,
-      user_sub: bootstrapPayload.sub || ""
-    });
     window.aauthApplyBootstrapResult(result);
-    const psBootstrapEndpoint = ctx.psBootstrapEndpoint || (ctx.psUrl ? `${ctx.psUrl.replace(/\/$/, "")}/bootstrap` : null);
-    if (psBootstrapEndpoint && result.agent_token) {
-      const announcePath = new URL(psBootstrapEndpoint).pathname;
-      const announceStep = addLogStep(
-        fmt(copy("bootstrap.ps_announce_request.label_template"), { path: announcePath }),
-        "pending",
-        desc("bootstrap.ps_announce_request") + formatRequest("POST", psBootstrapEndpoint, {
-          "Content-Length": "0",
-          "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-          "Signature": "sig=:...:",
-          "Signature-Key": `sig=jwt;jwt="${result.agent_token.substring(0, 20)}..."`
-        }, null)
-      );
-      try {
-        const res = await (0, import_httpsig.fetch)(psBootstrapEndpoint, {
-          method: "POST",
-          signingKey: publicJwk,
-          signingCryptoKey: keyPair.privateKey,
-          signatureKey: { type: "jwt", jwt: result.agent_token },
-          components: ["@method", "@authority", "@path", "signature-key"]
-        });
-        const status = res.status === 204 ? "success" : res.ok ? "success" : "error";
-        resolveStep(announceStep, status, fmt(copy("bootstrap.ps_announce_request.label_resolved_template"), { path: announcePath, status: res.status }));
-        let bodyText = null;
-        try {
-          bodyText = await res.text();
-        } catch {
-        }
-        appendStepBody(announceStep, formatResponse(res.status, null, bodyText && bodyText.length ? bodyText : null));
-      } catch (err) {
-        resolveStep(announceStep, "error", fmt(copy("bootstrap.ps_announce_request.label_error_network_template"), { path: announcePath }));
-        appendStepBody(announceStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      }
-    }
     return { result };
   }
-  async function deriveBindingKeyBrowser(psUrl, userSub) {
-    const data = new TextEncoder().encode(`${psUrl}|${userSub}`);
-    const hash = await crypto.subtle.digest("SHA-256", data);
-    const bytes = new Uint8Array(hash);
-    let binary = "";
-    for (const b of bytes) binary += String.fromCharCode(b);
-    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  }
   async function runRefresh() {
-    const { bindingKey } = window.aauthBinding.get();
-    if (!bindingKey) return null;
-    const oldKeyPair = window.aauthEphemeral.get();
-    const agentToken = localStorage.getItem("aauth-agent-token");
-    if (!oldKeyPair || !agentToken) {
+    const keyPair = window.aauthEphemeral.get();
+    if (!keyPair) {
       addLogStep(
         copy("refresh.cannot_refresh.label"),
         "error",
@@ -3810,113 +3376,54 @@ ${renderJSON(body)}`;
       return null;
     }
     addLogSection(copy("sections.refresh"));
-    const { publicJwk: newPublicJwk } = await window.aauthEphemeral.stage();
-    addLogStep(
-      copy("refresh.stage_new_ephemeral.label"),
-      "success",
-      desc("refresh.stage_new_ephemeral") + tokenWrap(renderJSON({ kty: newPublicJwk.kty, crv: newPublicJwk.crv, x: newPublicJwk.x }))
-    );
-    const oldSigningJwk = await crypto.subtle.exportKey("jwk", oldKeyPair.publicKey);
-    const refreshChallengeEndpoint = `${window.location.origin}/refresh/challenge`;
-    const refreshChallengeBody = { binding_key: bindingKey, new_ephemeral_jwk: newPublicJwk };
-    const reqStep = addLogStep(
-      fmt(copy("refresh.agent_server_refresh_challenge_request.label_template"), { path: new URL(refreshChallengeEndpoint).pathname }),
-      "pending",
-      desc("refresh.agent_server_refresh_challenge_request") + formatRequest("POST", refreshChallengeEndpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-      }, refreshChallengeBody)
-    );
-    let challengeData;
-    try {
-      const res = await (0, import_httpsig.fetch)(refreshChallengeEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(refreshChallengeBody),
-        signingKey: oldSigningJwk,
-        signingCryptoKey: oldKeyPair.privateKey,
-        signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"]
-      });
-      challengeData = await res.json();
-      if (!res.ok) {
-        resolveStep(reqStep, "error", fmt(copy("refresh.agent_server_refresh_challenge_request.label_resolved_template"), { path: "/refresh/challenge", status: res.status }));
-        appendStepBody(reqStep, formatResponse(res.status, null, challengeData));
-        window.aauthEphemeral.discardStaged();
-        window.aauthBinding.clearBinding();
-        return null;
+    const publicJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    let psUrl;
+    const savedToken = localStorage.getItem("aauth-agent-token");
+    if (savedToken) {
+      try {
+        psUrl = decodeJWTPayloadBrowser(savedToken)?.ps;
+      } catch {
       }
-      resolveStep(reqStep, "success", fmt(copy("refresh.agent_server_refresh_challenge_request.label_resolved_template"), { path: "/refresh/challenge", status: 200 }));
-      appendStepBody(reqStep, formatResponse(200, null, challengeData));
-    } catch (err) {
-      resolveStep(reqStep, "error", fmt(copy("refresh.agent_server_refresh_challenge_request.label_error_network_template"), { path: "/refresh/challenge" }));
-      appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      window.aauthEphemeral.discardStaged();
-      return null;
     }
-    let webauthnResponse;
-    try {
-      const parsed = window.aauthWebAuthn.parseRequestOptions(challengeData.webauthn_options);
-      const cred = await navigator.credentials.get({ publicKey: parsed });
-      webauthnResponse = window.aauthWebAuthn.serializeAssertion(cred);
-    } catch (err) {
-      addLogStep(
-        copy("refresh.webauthn_assertion_failed.label"),
-        "error",
-        desc("refresh.webauthn_assertion_failed") + `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`
-      );
-      window.aauthEphemeral.discardStaged();
-      return null;
-    }
-    addLogStep(copy("refresh.webauthn_ceremony_success.label"), "success", "");
-    const refreshVerifyEndpoint = `${window.location.origin}/refresh/verify`;
-    const refreshVerifyBody = {
-      refresh_tx_id: challengeData.refresh_tx_id,
-      webauthn_response: webauthnResponse
-    };
-    const verifyStep = addLogStep(
-      fmt(copy("refresh.agent_server_refresh_verify_request.label_template"), { path: new URL(refreshVerifyEndpoint).pathname }),
+    if (!psUrl) psUrl = window.getCurrentPS?.() || void 0;
+    const body = psUrl ? { ps: psUrl } : {};
+    const endpoint = `${window.location.origin}/refresh`;
+    const reqStep = addLogStep(
+      fmt(copy("refresh.agent_provider_request.label_template"), { path: "/refresh" }),
       "pending",
-      desc("refresh.agent_server_refresh_verify_request") + formatRequest("POST", refreshVerifyEndpoint, {
+      desc("refresh.agent_provider_request") + formatRequest("POST", endpoint, {
         "Content-Type": "application/json",
         "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
         "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-      }, {
-        refresh_tx_id: challengeData.refresh_tx_id,
-        webauthn_response: "(assertion)"
-      })
+        "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
+      }, body)
     );
     let result;
     try {
-      const res = await (0, import_httpsig.fetch)(refreshVerifyEndpoint, {
+      const res = await (0, import_httpsig.fetch)(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(refreshVerifyBody),
-        signingKey: oldSigningJwk,
-        signingCryptoKey: oldKeyPair.privateKey,
-        signatureKey: { type: "jwt", jwt: agentToken },
+        body: JSON.stringify(body),
+        signingKey: publicJwk,
+        signingCryptoKey: keyPair.privateKey,
+        signatureKey: { type: "hwk" },
         components: ["@method", "@authority", "@path", "content-type", "signature-key"]
       });
-      result = await res.json();
-      if (!res.ok) {
-        resolveStep(verifyStep, "error", fmt(copy("refresh.agent_server_refresh_verify_request.label_resolved_template"), { path: "/refresh/verify", status: res.status }));
-        appendStepBody(verifyStep, formatResponse(res.status, null, result));
-        window.aauthEphemeral.discardStaged();
+      result = await res.json().catch(() => null);
+      if (!res.ok || !result?.agent_token) {
+        resolveStep(reqStep, "error", fmt(copy("refresh.agent_provider_request.label_resolved_template"), { path: "/refresh" }) + ` \u2192 ${res.status}`);
+        appendStepBody(reqStep, formatResponse(res.status, null, result));
         return null;
       }
-      resolveStep(verifyStep, "success", fmt(copy("refresh.agent_server_refresh_verify_request.label_resolved_template"), { path: "/refresh/verify", status: 200 }));
+      resolveStep(reqStep, "success", fmt(copy("refresh.agent_provider_request.label_resolved_template"), { path: "/refresh" }) + ` \u2192 ${res.status}`);
+      appendStepBody(reqStep, formatResponse(res.status, null, result));
+      appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token)));
     } catch (err) {
-      resolveStep(verifyStep, "error", fmt(copy("refresh.agent_server_refresh_verify_request.label_error_network_template"), { path: "/refresh/verify" }));
-      appendStepBody(verifyStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
-      window.aauthEphemeral.discardStaged();
+      resolveStep(reqStep, "error", fmt(copy("refresh.agent_provider_request.label_error_network_template"), { path: "/refresh" }));
+      appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
       return null;
     }
-    await window.aauthEphemeral.commitStaged();
     window.aauthApplyBootstrapResult(result);
-    appendStepBody(verifyStep, formatToken("Agent Token (aa-agent+jwt)", result.agent_token, decodeJWTPayloadBrowser(result.agent_token)));
     return result;
   }
   async function startBootstrap() {
@@ -3927,23 +3434,30 @@ ${renderJSON(body)}`;
     }
     const controls = document.getElementById("bootstrap-controls");
     controls?.classList.add("hidden");
-    const hints = getHints();
-    window.aauthBinding.clearBinding();
     localStorage.removeItem("aauth-agent-token");
     window.aauthUI?.setUnauthenticated?.();
     document.getElementById("bootstrap-artifacts")?.classList.remove("hidden");
     setActiveLog("bootstrap-log");
     clearLog();
     showLog();
-    const result = await runBootstrap(psUrl, hints);
+    const result = await runBootstrap(psUrl);
     if (!result) {
       controls?.classList.remove("hidden");
     }
   }
+  function getBoundPs() {
+    const token = localStorage.getItem("aauth-agent-token");
+    if (!token) return null;
+    try {
+      return decodeJWTPayloadBrowser(token)?.ps || null;
+    } catch {
+      return null;
+    }
+  }
   async function startWhoami() {
-    const { bindingPs } = window.aauthBinding.get();
+    const bindingPs = getBoundPs() || window.getCurrentPS?.();
     if (!bindingPs) {
-      alert("No agent binding found. Bootstrap first.");
+      alert("No agent token found. Bootstrap first.");
       return;
     }
     setActiveLog("whoami-log");
@@ -4160,80 +3674,6 @@ ${renderJSON(body)}`;
     }
     return html;
   }
-  var PENDING_KEY = "aauth-pending-bootstrap";
-  function savePendingBootstrap(state) {
-    try {
-      localStorage.setItem(PENDING_KEY, JSON.stringify({ ...state, startedAt: Date.now() }));
-    } catch {
-    }
-  }
-  function clearPendingBootstrap() {
-    try {
-      localStorage.removeItem(PENDING_KEY);
-    } catch {
-    }
-  }
-  var _resumeInteractionPolling = false;
-  async function resumePendingInteraction() {
-    let saved;
-    try {
-      saved = JSON.parse(localStorage.getItem(PENDING_KEY) || "null");
-    } catch {
-      saved = null;
-    }
-    if (!saved?.pollUrl) return false;
-    if (Date.now() - (saved.startedAt || 0) > 10 * 60 * 1e3) {
-      clearPendingBootstrap();
-      return false;
-    }
-    const kp = window.aauthEphemeral.get();
-    if (!kp) {
-      clearPendingBootstrap();
-      return false;
-    }
-    if (_resumeInteractionPolling) return false;
-    _resumeInteractionPolling = true;
-    document.getElementById("bootstrap-controls")?.classList.add("hidden");
-    document.getElementById("bootstrap-artifacts")?.classList.remove("hidden");
-    setActiveLog("bootstrap-log");
-    showLog();
-    currentLog()?.querySelectorAll(":scope > details.log-section").forEach((s) => s.setAttribute("open", ""));
-    const log = currentLog();
-    if (!log.querySelector(":scope > details.log-section")) {
-      addLogSection(copy("sections.bootstrap"));
-    }
-    const publicJwk = await crypto.subtle.exportKey("jwk", kp.publicKey);
-    let interactionStep = log.querySelector('[data-consent-key="bootstrap"]');
-    const resumedLabel = copy("bootstrap_resumed.ps_consent_prompt.label_redirected");
-    if (interactionStep) {
-      resolveStep(interactionStep, "success", resumedLabel);
-    } else {
-      interactionStep = addLogStep(resumedLabel, "success", "");
-    }
-    const existingPollStep = log.querySelector('[data-poll-key="bootstrap"]');
-    const pending = await pollForBootstrapToken(saved.pollUrl, kp, publicJwk, null, existingPollStep || void 0);
-    if (!pending) return true;
-    await completeAgentServerBootstrap(pending.bootstrap_token, publicJwk, kp, { psUrl: saved.psUrl, psBootstrapEndpoint: saved.bootstrapEndpoint });
-    return true;
-  }
-  window.resumePendingInteraction = resumePendingInteraction;
-  function placeTokenDetailsInBootstrapLog({ open }) {
-    const log = document.getElementById("bootstrap-log");
-    if (!log) return;
-    const sections = log.querySelectorAll(":scope > details.log-section");
-    const target = sections[sections.length - 1];
-    if (!target) return;
-    log.classList.remove("hidden");
-    const tokenDetails = document.getElementById("agent-token-details");
-    const decodedDetails = document.getElementById("decoded-payload-details");
-    for (const el of [tokenDetails, decodedDetails]) {
-      if (!el) continue;
-      if (open) el.setAttribute("open", "");
-      else el.removeAttribute("open");
-      target.appendChild(el);
-    }
-  }
-  window.aauthPlaceTokenDetails = placeTokenDetailsInBootstrapLog;
   var PENDING_AUTHZ_KEY = "aauth-pending-authorize";
   function savePendingAuthorize(state) {
     try {
@@ -4309,11 +3749,6 @@ ${renderJSON(body)}`;
   window.resumePendingAuthorize = resumePendingAuthorize;
   function fireFallbackResume() {
     setTimeout(() => {
-      try {
-        window.resumePendingInteraction?.();
-      } catch (err) {
-        console.error("[aauth] fallback resumePendingInteraction threw:", err);
-      }
       try {
         window.resumePendingAuthorize?.();
       } catch (err) {
@@ -4722,9 +4157,9 @@ ${renderJSON(body)}`;
     return Array.from(document.querySelectorAll('#notes-ops-grid input[type="checkbox"]:checked')).map((cb) => ({ operationId: cb.value }));
   }
   async function startNotes() {
-    const { bindingPs } = window.aauthBinding.get();
+    const bindingPs = getBoundPs() || window.getCurrentPS?.();
     if (!bindingPs) {
-      alert("No agent binding found. Bootstrap first.");
+      alert("No agent token found. Bootstrap first.");
       return;
     }
     setActiveLog("notes-log");
