@@ -300,6 +300,12 @@ function updateWhoamiUrlPreview() {
   el.textContent = url
   document.getElementById('whoami-no-scopes-caption')
     ?.classList.toggle('hidden', scopes.length > 0)
+  const btn = document.getElementById('whoami-btn')
+  if (btn) {
+    btn.innerHTML = scopes.length > 0
+      ? 'ō&nbsp;&nbsp;&nbsp;Whoami with Hellō'
+      : 'Whoami with agent'
+  }
 }
 window.updateWhoamiUrlPreview = updateWhoamiUrlPreview
 
