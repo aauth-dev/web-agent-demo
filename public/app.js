@@ -339,6 +339,37 @@ window.updateNotesRequestPreview = updateNotesRequestPreview
 const SETTINGS_KEY = 'aauth-playground-settings'
 const DEFAULT_PS = 'https://person.hello-beta.net'
 
+// Dev escape hatch: if the developer has set localStorage.plausible_ignore =
+// "true" (Plausible's own opt-out flag, repurposed here as a "developer
+// mode" signal), replace the single PS entry with a radio chooser so we can
+// point the playground at hello-staging / hello.coop / hello-dev without
+// shipping those options to regular visitors.
+const PS_OPTIONS = [
+  { label: 'hello-beta', url: 'https://person.hello-beta.net' },
+  { label: 'hello-staging', url: 'https://person.hello-staging.net' },
+  { label: 'hello.coop', url: 'https://person.hello.coop' },
+  { label: 'hello-dev', url: 'https://person.hello-dev.net' },
+]
+
+function isDevMode() {
+  try { return localStorage.getItem('plausible_ignore') === 'true' } catch { return false }
+}
+
+function renderPSChooser() {
+  if (!isDevMode()) return
+  const list = document.getElementById('ps-list')
+  if (!list) return
+  list.innerHTML = PS_OPTIONS.map((opt, i) => `
+    <li>
+      <label class="radio-label">
+        <input type="radio" name="ps-choice" value="${opt.url}"${opt.url === DEFAULT_PS ? ' checked' : ''}>
+        <span class="ps-url mono">${opt.url}</span>
+      </label>
+      <button class="copy-btn" type="button" data-copy="${opt.url}" aria-label="Copy"></button>
+    </li>
+  `).join('')
+}
+
 function loadSettings() {
   let saved = {}
   try {
@@ -386,7 +417,8 @@ window.aauthGetSavedNotesOperations = function aauthGetSavedNotesOperations() {
 }
 
 function getCurrentPS() {
-  return DEFAULT_PS
+  const checked = document.querySelector('#ps-list input[name="ps-choice"]:checked')
+  return checked ? checked.value : DEFAULT_PS
 }
 window.getCurrentPS = getCurrentPS
 
@@ -412,6 +444,7 @@ function wireSettingsAutosave() {
 
 ;(async () => {
   hydrateIdentityScopes()
+  renderPSChooser()
   loadSettings()
   wireSettingsAutosave()
   updateWhoamiUrlPreview()
