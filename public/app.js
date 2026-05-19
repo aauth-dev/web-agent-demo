@@ -337,17 +337,17 @@ window.updateNotesRequestPreview = updateNotesRequestPreview
 // ── Settings persistence ──
 
 const SETTINGS_KEY = 'aauth-playground-settings'
-const DEFAULT_PS = 'https://person.hello-beta.net'
+const DEFAULT_PS = 'https://person.hello.coop'
 
 // Dev escape hatch: if the developer has set localStorage.plausible_ignore =
 // "true" (Plausible's own opt-out flag, repurposed here as a "developer
 // mode" signal), replace the single PS entry with a radio chooser so we can
-// point the playground at hello-staging / hello.coop / hello-dev without
+// point the playground at hello-staging / hello-beta / hello-dev without
 // shipping those options to regular visitors.
 const PS_OPTIONS = [
-  { label: 'hello-beta', url: 'https://person.hello-beta.net' },
-  { label: 'hello-staging', url: 'https://person.hello-staging.net' },
   { label: 'hello.coop', url: 'https://person.hello.coop' },
+  { label: 'hello-staging', url: 'https://person.hello-staging.net' },
+  { label: 'hello-beta', url: 'https://person.hello-beta.net' },
   { label: 'hello-dev', url: 'https://person.hello-dev.net' },
 ]
 
