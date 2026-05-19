@@ -555,7 +555,7 @@
         }
       }
       async function fetch2(url, options) {
-        const { signingKey, signingCryptoKey, signatureKey, label = "sig", components: customComponents, dryRun = false, method = "GET", headers: inputHeaders = {}, body, ...fetchOptions } = options;
+        const { signingKey, signingCryptoKey, signatureKey, label = "sig", components: customComponents, dryRun = false, returnSent = false, method = "GET", headers: inputHeaders = {}, body, ...fetchOptions } = options;
         (0, crypto_js_1.validateJwk)(signingKey);
         let privateKey;
         let algorithm;
@@ -647,12 +647,24 @@
         if (dryRun) {
           return { headers };
         }
-        return globalThis.fetch(urlObj, {
+        const response = await globalThis.fetch(urlObj, {
           ...fetchOptions,
           method,
           headers,
           body
         });
+        if (returnSent) {
+          return {
+            response,
+            sent: {
+              method,
+              url: urlObj.href,
+              headers,
+              body: body ?? null
+            }
+          };
+        }
+        return response;
       }
     }
   });
@@ -687,6 +699,17 @@
               kty: jwk.kty,
               x: jwk.x,
               y: jwk.y
+            });
+            break;
+          }
+          case "RSA": {
+            if (!jwk.e || !jwk.n) {
+              throw new Error("RSA key missing required fields (e, n)");
+            }
+            canonical = JSON.stringify({
+              e: jwk.e,
+              kty: jwk.kty,
+              n: jwk.n
             });
             break;
           }
@@ -1138,7 +1161,7 @@
     "node_modules/@hellocoop/httpsig/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
-      exports.DEFAULT_COMPONENTS_BODY = exports.DEFAULT_COMPONENTS_GET = exports.VALID_DERIVED_COMPONENTS = exports.generateKeyPair = exports.parseAcceptSignature = exports.generateAcceptSignatureHeader = exports.parseSignatureError = exports.generateSignatureErrorHeader = exports.nextJsPagesVerify = exports.nextJsVerify = exports.fastifyVerify = exports.expressVerify = exports.verify = void 0;
+      exports.DEFAULT_COMPONENTS_BODY = exports.DEFAULT_COMPONENTS_GET = exports.VALID_DERIVED_COMPONENTS = exports.calculateThumbprint = exports.generateKeyPair = exports.parseAcceptSignature = exports.generateAcceptSignatureHeader = exports.parseSignatureError = exports.generateSignatureErrorHeader = exports.nextJsPagesVerify = exports.nextJsVerify = exports.fastifyVerify = exports.expressVerify = exports.verify = void 0;
       var fetch_js_1 = require_fetch();
       Object.defineProperty(exports, "fetch", { enumerable: true, get: function() {
         return fetch_js_1.fetch;
@@ -1176,6 +1199,10 @@
       var crypto_js_1 = require_crypto();
       Object.defineProperty(exports, "generateKeyPair", { enumerable: true, get: function() {
         return crypto_js_1.generateKeyPair;
+      } });
+      var thumbprint_js_1 = require_thumbprint();
+      Object.defineProperty(exports, "calculateThumbprint", { enumerable: true, get: function() {
+        return thumbprint_js_1.calculateThumbprint;
       } });
       var types_js_1 = require_types();
       Object.defineProperty(exports, "VALID_DERIVED_COMPONENTS", { enumerable: true, get: function() {
@@ -3073,6 +3100,22 @@
     } catch {
     }
   });
+  function headersToObject(headers) {
+    const out = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  function tryParseBody(body) {
+    if (body == null) return null;
+    if (typeof body !== "string") return body;
+    try {
+      return JSON.parse(body);
+    } catch {
+      return body;
+    }
+  }
   window.aauthSigFetch = async function aauthSigFetch(url, { method = "GET", headers = {}, body, jwt } = {}) {
     const keyPair = window.aauthEphemeral.get();
     if (!keyPair) throw new Error("no signing key available");
@@ -3379,24 +3422,23 @@ ${renderJSON(body)}`;
     const reqStep = addLogStep(
       fmt(copy("bootstrap.agent_provider_request.label_template"), { path: "/bootstrap" }),
       "pending",
-      desc("bootstrap.agent_provider_request") + formatRequest("POST", endpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
-      }, body)
+      desc("bootstrap.agent_provider_request")
     );
     let result;
+    let res;
     try {
-      const res = await (0, import_httpsig.fetch)(endpoint, {
+      const { response, sent } = await (0, import_httpsig.fetch)(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signingKey: publicJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "hwk" },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"]
+        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        returnSent: true
       });
+      res = response;
+      appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       result = await res.json().catch(() => null);
       if (!res.ok || !result?.agent_token) {
         resolveStep(reqStep, "error", fmt(copy("bootstrap.agent_provider_request.label_resolved_template"), { path: "/bootstrap" }) + ` \u2192 ${res.status}`);
@@ -3440,24 +3482,23 @@ ${renderJSON(body)}`;
     const reqStep = addLogStep(
       fmt(copy("refresh.agent_provider_request.label_template"), { path: "/refresh" }),
       "pending",
-      desc("refresh.agent_provider_request") + formatRequest("POST", endpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`
-      }, body)
+      desc("refresh.agent_provider_request")
     );
     let result;
+    let res;
     try {
-      const res = await (0, import_httpsig.fetch)(endpoint, {
+      const { response, sent } = await (0, import_httpsig.fetch)(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signingKey: publicJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "hwk" },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"]
+        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        returnSent: true
       });
+      res = response;
+      appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       result = await res.json().catch(() => null);
       if (!res.ok || !result?.agent_token) {
         resolveStep(reqStep, "error", fmt(copy("refresh.agent_provider_request.label_resolved_template"), { path: "/refresh" }) + ` \u2192 ${res.status}`);
@@ -3550,21 +3591,19 @@ ${renderJSON(body)}`;
     const step1 = addLogStep(
       `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`,
       "pending",
-      `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>` + formatRequest("GET", whoamiUrl, {
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-      }, null)
+      `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>`
     );
     let resourceToken;
     try {
-      const res = await (0, import_httpsig.fetch)(whoamiUrl, {
+      const { response: res, sent } = await (0, import_httpsig.fetch)(whoamiUrl, {
         method: "GET",
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "signature-key"]
+        components: ["@method", "@authority", "@path", "signature-key"],
+        returnSent: true
       });
+      appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const body = await res.json().catch(() => null);
       const requirement = res.headers.get("aauth-requirement") || "";
       const respHeaders = {};
@@ -3634,20 +3673,18 @@ ${renderJSON(body)}`;
     const step = addLogStep(
       `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`,
       "pending",
-      `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>` + formatRequest("GET", whoamiUrl, {
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${authToken?.substring(0, 20)}..."`
-      }, null)
+      `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>`
     );
     try {
-      const res = await (0, import_httpsig.fetch)(whoamiUrl, {
+      const { response: res, sent } = await (0, import_httpsig.fetch)(whoamiUrl, {
         method: "GET",
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: authToken },
-        components: ["@method", "@authority", "@path", "signature-key"]
+        components: ["@method", "@authority", "@path", "signature-key"],
+        returnSent: true
       });
+      appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const body = await res.json().catch(() => null);
       resolveStep(step, res.ok ? "success" : "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
       if (res.ok) {
@@ -3871,27 +3908,20 @@ ${renderJSON(body)}`;
       ...hints,
       provider_hint: "email--"
     };
-    const step2 = addLogStep(
-      labels.postLabel(psPath),
-      "pending",
-      labels.postDescription + formatRequest("POST", tokenEndpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-      }, psBody)
-    );
+    const step2 = addLogStep(labels.postLabel(psPath), "pending", labels.postDescription);
     let authToken;
     try {
-      const psRes = await (0, import_httpsig.fetch)(tokenEndpoint, {
+      const { response: psRes, sent } = await (0, import_httpsig.fetch)(tokenEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(psBody),
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "signature-key"]
+        components: ["@method", "@authority", "@path", "signature-key"],
+        returnSent: true
       });
+      appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const psResBody = await psRes.json().catch(() => null);
       const respHeaders = {};
       for (const key of ["location", "retry-after", "aauth-requirement"]) {
@@ -3920,12 +3950,7 @@ ${renderJSON(body)}`;
           pollStep = addLogStep(
             labels.pollLabel(new URL(absolutePollUrl).pathname),
             "pending",
-            labels.pollDescription + formatRequest("GET", absolutePollUrl, {
-              "Prefer": `wait=${POLL_WAIT_SECONDS}`,
-              "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-              "Signature": "sig=:...:",
-              "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-            }, null)
+            labels.pollDescription
           );
           if (pollStep) {
             pollStep.dataset.pollKey = consentKey;
@@ -3993,26 +4018,25 @@ ${renderJSON(body)}`;
       pollStep = addLogStep(
         fmt(copy("authorize.ps_pending_longpoll.label_template"), { path: pollPath }),
         "pending",
-        desc("authorize.ps_pending_longpoll") + formatRequest("GET", absolutePollUrl, {
-          "Prefer": `wait=${POLL_WAIT_SECONDS}`,
-          "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-          "Signature": "sig=:...:",
-          "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-        }, null)
+        desc("authorize.ps_pending_longpoll")
       );
     }
     let cycle = 0;
     while (true) {
       cycle++;
       try {
-        const res = await (0, import_httpsig.fetch)(absolutePollUrl, {
+        const { response: res, sent } = await (0, import_httpsig.fetch)(absolutePollUrl, {
           method: "GET",
           headers: { Prefer: `wait=${POLL_WAIT_SECONDS}` },
           signingKey: signingJwk,
           signingCryptoKey: keyPair.privateKey,
           signatureKey: { type: "jwt", jwt: agentToken },
-          components: ["@method", "@authority", "@path", "signature-key"]
+          components: ["@method", "@authority", "@path", "signature-key"],
+          returnSent: true
         });
+        if (cycle === 1) {
+          appendStepBody(pollStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
+        }
         const respHeaders = {};
         for (const key of ["retry-after", "aauth-requirement"]) {
           const v = res.headers.get(key);
@@ -4308,24 +4332,21 @@ ${renderJSON(body)}`;
     const step1 = addLogStep(
       fmt(copy("notes.authorize_request.label_template"), { path: authzPath }),
       "pending",
-      desc("notes.authorize_request") + formatRequest("POST", authzEndpoint, {
-        "Content-Type": "application/json",
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`
-      }, requestBody)
+      desc("notes.authorize_request")
     );
     let resourceToken;
     try {
-      const res = await (0, import_httpsig.fetch)(authzEndpoint, {
+      const { response: res, sent } = await (0, import_httpsig.fetch)(authzEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"]
+        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        returnSent: true
       });
+      appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const body = await res.json().catch(() => null);
       if (res.ok && body?.resource_token) {
         resourceToken = body.resource_token;
@@ -4570,23 +4591,20 @@ ${renderJSON(body)}`;
     const step = addLogStep(
       fmt(copy(`${copyKey}.label_template`), { path }),
       "pending",
-      desc(copyKey) + formatRequest(method, url, {
-        ...hasBody ? { "Content-Type": "application/json" } : {},
-        "Signature-Input": "sig=(...);created=...",
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${authToken.substring(0, 20)}..."`
-      }, hasBody ? body : null)
+      desc(copyKey)
     );
     try {
-      const res = await (0, import_httpsig.fetch)(url, {
+      const { response: res, sent } = await (0, import_httpsig.fetch)(url, {
         method,
         headers: hasBody ? { "Content-Type": "application/json" } : {},
         body: hasBody ? JSON.stringify(body) : void 0,
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: authToken },
-        components
+        components,
+        returnSent: true
       });
+      appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const resBody = res.status === 204 ? null : await res.json().catch(() => null);
       if (res.ok) {
         resolveStep(step, "success", fmt(copy(`${copyKey}.label_resolved_template`), { path, status: res.status }));
@@ -4645,21 +4663,19 @@ ${renderJSON(body)}`;
     const reqStep = addLogStep(
       fmt(copy("demo_api.request.label_template"), { path: new URL(endpoint).pathname }),
       "pending",
-      desc("demo_api.request") + formatRequest("GET", endpoint, {
-        "Signature-Input": 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        "Signature": "sig=:...:",
-        "Signature-Key": `sig=jwt;jwt="${authToken?.substring(0, 20)}..."`
-      }, null)
+      desc("demo_api.request")
     );
     try {
       const signingJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-      const res = await (0, import_httpsig.fetch)(endpoint, {
+      const { response: res, sent } = await (0, import_httpsig.fetch)(endpoint, {
         method: "GET",
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: authToken },
-        components: ["@method", "@authority", "@path", "signature-key"]
+        components: ["@method", "@authority", "@path", "signature-key"],
+        returnSent: true
       });
+      appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const body = await res.json().catch(() => null);
       resolveStep(reqStep, res.ok ? "success" : "error", fmt(copy("demo_api.request.label_resolved_template"), { path: "/api/demo", status: res.status }));
       addLogStep(
