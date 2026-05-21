@@ -2872,9 +2872,9 @@
         description: "The agent creates a fresh signing keypair. The private half never leaves this device, so tokens issued later are useless to anyone else."
       },
       agent_provider_request: {
-        label_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        label_template: "Agent \u2192 Agent Provider",
+        label_resolved_template: "Agent \u2192 Agent Provider",
+        label_error_network_template: "Agent \u2192 Agent Provider (network error)",
         description: "The agent posts to the Agent Provider's bootstrap endpoint with a sig=hwk request \u2014 its public key is in the Signature-Key header, and the body names the Person Server the user picked. The Agent Provider records the (key thumbprint \u2192 agent name) mapping in its KV and returns an agent_token bound to the key."
       }
     },
@@ -2884,9 +2884,9 @@
         description: "No saved key on this device, so there's nothing to refresh \u2014 a fresh bootstrap is needed."
       },
       agent_provider_request: {
-        label_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        label_template: "Agent \u2192 Agent Provider",
+        label_resolved_template: "Agent \u2192 Agent Provider",
+        label_error_network_template: "Agent \u2192 Agent Provider (network error)",
         description: "The agent signs a refresh request with the same hwk key the Agent Provider already has on file. The Agent Provider looks up the agent name by thumbprint and mints a fresh agent_token bound to the same key."
       }
     },
@@ -2896,20 +2896,20 @@
         description: "The agent doesn't have an agent_token or key yet \u2014 bootstrap has to finish first."
       },
       agent_provider_authorize_request: {
-        label_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_resolved_template: "Agent \u2192 Agent Provider: POST {path}",
-        label_error_network_template: "Agent \u2192 Agent Provider: POST {path} (network error)",
+        label_template: "Agent \u2192 Agent Provider",
+        label_resolved_template: "Agent \u2192 Agent Provider",
+        label_error_network_template: "Agent \u2192 Agent Provider (network error)",
         description: "The agent asks its Agent Provider for a resource token scoped to this Person Server and resource. The Agent Provider signs it on the agent's behalf."
       },
       ps_token_request: {
-        label_template: "Agent \u2192 Person Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Person Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Person Server: POST {path} (network error)",
+        label_template: "Agent \u2192 Person Server",
+        label_resolved_template: "Agent \u2192 Person Server",
+        label_error_network_template: "Agent \u2192 Person Server (network error)",
         description: "The agent trades that resource token with your Person Server for an auth token. A 200 means you've already consented to this scope; 202 means the Person Server needs your approval for a new one."
       },
       ps_pending_longpoll: {
-        label_template: "Agent \u2192 Person Server: GET {path} (long-poll)",
-        label_resolved_template: "Agent \u2192 Person Server: GET {path}",
+        label_template: "Agent \u2192 Person Server (long-poll)",
+        label_resolved_template: "Agent \u2192 Person Server",
         description: "If new consent is needed, the agent keeps one request open while you decide, instead of polling. The Person Server responds the moment you approve or deny."
       },
       ps_consent_prompt: {
@@ -2940,38 +2940,38 @@
     },
     notes: {
       resource_metadata_request: {
-        label_template: "Agent \u2192 Notes Resource: GET {path}",
-        label_resolved_template: "Agent \u2192 Notes Resource: GET {path}",
-        label_error_network_template: "Agent \u2192 Notes Resource: GET {path} (network error)",
+        label_template: "Agent \u2192 Notes Resource",
+        label_resolved_template: "Agent \u2192 Notes Resource",
+        label_error_network_template: "Agent \u2192 Notes Resource (network error)",
         description: "The agent fetches the resource's well-known metadata to discover the authorization endpoint plus the OpenAPI document describing the operations it can request."
       },
       openapi_request: {
-        label_template: "Agent \u2192 Notes Resource: GET {path}",
-        label_resolved_template: "Agent \u2192 Notes Resource: GET {path}",
-        label_error_network_template: "Agent \u2192 Notes Resource: GET {path} (network error)",
+        label_template: "Agent \u2192 Notes Resource",
+        label_resolved_template: "Agent \u2192 Notes Resource",
+        label_error_network_template: "Agent \u2192 Notes Resource (network error)",
         description: "The agent pulls the OpenAPI spec so it can render a checkbox per operationId \u2014 the protocol lets the agent ask for exactly the operations it needs."
       },
       authorize_request: {
-        label_template: "Agent \u2192 Notes Resource: POST {path}",
-        label_resolved_template: "Agent \u2192 Notes Resource: POST {path}",
-        label_error_network_template: "Agent \u2192 Notes Resource: POST {path} (network error)",
+        label_template: "Agent \u2192 Notes Resource",
+        label_resolved_template: "Agent \u2192 Notes Resource",
+        label_error_network_template: "Agent \u2192 Notes Resource (network error)",
         description: "The agent POSTs the operations it wants to the resource's authorize endpoint, signed with its agent_token. The resource responds with a resource_token naming an R3 document the Person Server will fetch during token exchange."
       },
       r3_document_request: {
-        label_template: "Demo: GET {path} (R3 document)",
-        label_resolved_template: "Demo: GET {path} (R3 document)",
-        label_error_network_template: "Demo: GET {path} (network error)",
+        label_template: "Demo (R3 document)",
+        label_resolved_template: "Demo (R3 document)",
+        label_error_network_template: "Demo (network error)",
         description: "The resource_token's r3_uri claim points at the R3 document the Person Server is about to fetch. In production this endpoint is gated on a PS HTTP signature; the notes resource leaves it publicly fetchable so the playground can preview the exact JSON the PS will receive."
       },
       ps_token_request: {
-        label_template: "Agent \u2192 Person Server: POST {path}",
-        label_resolved_template: "Agent \u2192 Person Server: POST {path}",
-        label_error_network_template: "Agent \u2192 Person Server: POST {path} (network error)",
+        label_template: "Agent \u2192 Person Server",
+        label_resolved_template: "Agent \u2192 Person Server",
+        label_error_network_template: "Agent \u2192 Person Server (network error)",
         description: "The agent trades the resource_token at the Person Server's token endpoint. A 200 means consent was already on file; a 202 triggers a consent prompt. The Person Server fetches the R3 document, then emits an auth_token carrying r3_granted \u2014 the operations it's releasing."
       },
       ps_pending_longpoll: {
-        label_template: "Agent \u2192 Person Server: GET {path} (long-poll)",
-        label_resolved_template: "Agent \u2192 Person Server: GET {path}",
+        label_template: "Agent \u2192 Person Server (long-poll)",
+        label_resolved_template: "Agent \u2192 Person Server",
         description: "If new consent is needed, the agent keeps a request open while you decide. The Person Server replies the moment you approve or deny."
       },
       ps_consent_prompt: {
@@ -3002,33 +3002,33 @@
     },
     notes_app: {
       list_request: {
-        label_template: "Agent \u2192 Notes API: GET {path}",
-        label_resolved_template: "Agent \u2192 Notes API: GET {path}",
-        label_error_network_template: "Agent \u2192 Notes API: GET {path} (network error)",
+        label_template: "Agent \u2192 Notes API",
+        label_resolved_template: "Agent \u2192 Notes API",
+        label_error_network_template: "Agent \u2192 Notes API (network error)",
         description: "The agent lists the user's notes, signing the request with the auth_token."
       },
       create_request: {
-        label_template: "Agent \u2192 Notes API: POST {path}",
-        label_resolved_template: "Agent \u2192 Notes API: POST {path}",
-        label_error_network_template: "Agent \u2192 Notes API: POST {path} (network error)",
+        label_template: "Agent \u2192 Notes API",
+        label_resolved_template: "Agent \u2192 Notes API",
+        label_error_network_template: "Agent \u2192 Notes API (network error)",
         description: "The agent creates a new note."
       },
       get_request: {
-        label_template: "Agent \u2192 Notes API: GET {path}",
-        label_resolved_template: "Agent \u2192 Notes API: GET {path}",
-        label_error_network_template: "Agent \u2192 Notes API: GET {path} (network error)",
+        label_template: "Agent \u2192 Notes API",
+        label_resolved_template: "Agent \u2192 Notes API",
+        label_error_network_template: "Agent \u2192 Notes API (network error)",
         description: "The agent reads a single note by id."
       },
       update_request: {
-        label_template: "Agent \u2192 Notes API: PUT {path}",
-        label_resolved_template: "Agent \u2192 Notes API: PUT {path}",
-        label_error_network_template: "Agent \u2192 Notes API: PUT {path} (network error)",
+        label_template: "Agent \u2192 Notes API",
+        label_resolved_template: "Agent \u2192 Notes API",
+        label_error_network_template: "Agent \u2192 Notes API (network error)",
         description: "The agent updates an existing note. Saving resets the note's 24-hour expiry."
       },
       delete_request: {
-        label_template: "Agent \u2192 Notes API: DELETE {path}",
-        label_resolved_template: "Agent \u2192 Notes API: DELETE {path}",
-        label_error_network_template: "Agent \u2192 Notes API: DELETE {path} (network error)",
+        label_template: "Agent \u2192 Notes API",
+        label_resolved_template: "Agent \u2192 Notes API",
+        label_error_network_template: "Agent \u2192 Notes API (network error)",
         description: "The agent deletes a note."
       }
     },
@@ -3038,9 +3038,9 @@
         description: "No signing key on this device \u2014 the demo call can't be signed, so it won't go out."
       },
       request: {
-        label_template: "GET {path}",
-        label_resolved_template: "GET {path}",
-        label_error_network_template: "GET {path} (network error)",
+        label_template: "Agent \u2192 Demo API",
+        label_resolved_template: "Agent \u2192 Demo API",
+        label_error_network_template: "Agent \u2192 Demo API (network error)",
         description: "The agent calls the resource's demo endpoint, signing the HTTP request with its private key and attaching the auth token. The server checks the signature matches the token, then checks the token's scope covers this endpoint."
       },
       success: {
@@ -3355,10 +3355,13 @@
     <div class="token-display${extraClass ? " " + extraClass : ""}" id="${id}">${innerHtml}</div>
   </div>`;
   }
+  function truncateHeaderValue(value) {
+    return String(value).replace(/[A-Za-z0-9_\-+/]{20,}={0,2}/g, (run) => `${run.slice(0, 8)}\u2026`);
+  }
   function formatRequest(method, url, headers, body) {
     let inner = `${escapeHtml(method)} ${escapeHtml(url)}`;
     if (headers) {
-      const lines = Object.entries(headers).map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`);
+      const lines = Object.entries(headers).map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(truncateHeaderValue(v))}`);
       if (lines.length) inner += `
 
 ${lines.join("\n")}`;
@@ -3397,7 +3400,7 @@ ${renderJSON(body)}`;
     return `
     ${tokenWrap(renderEncodedJWT(token), "encoded")}
     <details class="section-group" open>
-      <summary class="section-heading"><span>auth_token</span>${CHEVRON_SVG}</summary>
+      <summary class="section-heading"><span>auth_token decoded</span>${CHEVRON_SVG}</summary>
       ${tokenWrap(renderJSON(decodeJWTBrowser(token)), "token-display-response")}
     </details>
   `;
@@ -3447,7 +3450,7 @@ ${renderJSON(body)}`;
       }
       resolveStep(reqStep, "success", fmt(copy("bootstrap.agent_provider_request.label_resolved_template"), { path: "/bootstrap" }) + ` \u2192 ${res.status}`);
       appendStepBody(reqStep, formatResponse(res.status, null, result));
-      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token"));
+      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token decoded"));
     } catch (err) {
       resolveStep(reqStep, "error", fmt(copy("bootstrap.agent_provider_request.label_error_network_template"), { path: "/bootstrap" }));
       appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
@@ -3507,7 +3510,7 @@ ${renderJSON(body)}`;
       }
       resolveStep(reqStep, "success", fmt(copy("refresh.agent_provider_request.label_resolved_template"), { path: "/refresh" }) + ` \u2192 ${res.status}`);
       appendStepBody(reqStep, formatResponse(res.status, null, result));
-      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token"));
+      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token decoded"));
     } catch (err) {
       resolveStep(reqStep, "error", fmt(copy("refresh.agent_provider_request.label_error_network_template"), { path: "/refresh" }));
       appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
@@ -3589,7 +3592,7 @@ ${renderJSON(body)}`;
     const urlObj = new URL(whoamiUrl);
     const whoamiPathDisplay = urlObj.pathname + urlObj.search;
     const step1 = addLogStep(
-      `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`,
+      `Agent \u2192 Whoami`,
       "pending",
       `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>`
     );
@@ -3612,7 +3615,7 @@ ${renderJSON(body)}`;
         resourceToken = parseInteractionHeader(requirement)["resource-token"];
       }
       if (res.status === 200) {
-        resolveStep(step1, "success", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
+        resolveStep(step1, "success", `Agent \u2192 Whoami`);
         appendStepBody(step1, formatResponse(200, respHeaders, body));
         addLogStep(
           "Agent identity received",
@@ -3623,16 +3626,16 @@ ${renderJSON(body)}`;
         return;
       }
       if (res.status === 401 && resourceToken) {
-        resolveStep(step1, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
+        resolveStep(step1, "error", `Agent \u2192 Whoami`);
         appendStepBody(step1, formatResponse(401, respHeaders, body));
-        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token"));
+        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token decoded"));
       } else {
-        resolveStep(step1, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
+        resolveStep(step1, "error", `Agent \u2192 Whoami`);
         appendStepBody(step1, formatResponse(res.status, respHeaders, body) + anotherRequestButton());
         return;
       }
     } catch (err) {
-      resolveStep(step1, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay} (network error)`);
+      resolveStep(step1, "error", `Agent \u2192 Whoami (network error)`);
       appendStepBody(step1, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>` + anotherRequestButton());
       return;
     }
@@ -3644,11 +3647,11 @@ ${renderJSON(body)}`;
       agentToken,
       signingJwk,
       labels: {
-        postLabel: (path) => `Agent \u2192 Person Server: POST ${path}`,
-        postLabelResolved: (path, status) => status === 200 || status === 202 ? `Agent \u2192 Person Server: POST ${path}` : `Agent \u2192 Person Server: POST ${path} \u2192 ${status}`,
-        postLabelNetworkError: (path) => `Agent \u2192 Person Server: POST ${path} (network error)`,
+        postLabel: (path) => `Agent \u2192 Person Server`,
+        postLabelResolved: (path, status) => status === 200 || status === 202 ? `Agent \u2192 Person Server` : `Agent \u2192 Person Server \u2192 ${status}`,
+        postLabelNetworkError: (path) => `Agent \u2192 Person Server (network error)`,
         postDescription: `<p>Agent presents the resource_token and its agent_token to the Person Server's token endpoint. The PS either releases an auth_token immediately (cached consent) or returns a 202 with a consent prompt.</p>`,
-        pollLabel: (path) => `Agent \u2192 Person Server: GET ${path} (long-poll)`,
+        pollLabel: (path) => `Agent \u2192 Person Server (long-poll)`,
         pollDescription: `<p>Agent keeps a request open while you decide, instead of polling. The Person Server answers the moment you approve or deny.</p>`,
         consentLabel: copy("authorize.ps_consent_prompt.label"),
         consentDescription: desc("authorize.ps_consent_prompt")
@@ -3665,13 +3668,13 @@ ${renderJSON(body)}`;
     addLogStep(
       "Auth Token received",
       "success",
-      `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` + formatDecoded(decodeJWTBrowser(authToken), "auth_token"),
+      `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` + formatDecoded(decodeJWTBrowser(authToken), "auth_token decoded"),
       { kind: "response" }
     );
   }
   async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, signingJwk) {
     const step = addLogStep(
-      `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`,
+      `Agent \u2192 Whoami`,
       "pending",
       `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>`
     );
@@ -3686,7 +3689,7 @@ ${renderJSON(body)}`;
       });
       appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
       const body = await res.json().catch(() => null);
-      resolveStep(step, res.ok ? "success" : "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
+      resolveStep(step, res.ok ? "success" : "error", `Agent \u2192 Whoami`);
       if (res.ok) {
         addLogStep(
           "Identity claims received",
@@ -3699,7 +3702,7 @@ ${renderJSON(body)}`;
         appendStepBody(step, anotherRequestButton());
       }
     } catch (err) {
-      resolveStep(step, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay} (network error)`);
+      resolveStep(step, "error", `Agent \u2192 Whoami (network error)`);
       appendStepBody(step, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>` + anotherRequestButton());
     }
   }
@@ -3922,6 +3925,7 @@ ${renderJSON(body)}`;
         returnSent: true
       });
       appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
+      appendStepBody(step2, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token decoded"));
       const psResBody = await psRes.json().catch(() => null);
       const respHeaders = {};
       for (const key of ["location", "retry-after", "aauth-requirement"]) {
@@ -3932,7 +3936,7 @@ ${renderJSON(body)}`;
         authToken = psResBody.auth_token;
         resolveStep(step2, "success", labels.postLabelResolved(psPath, 200));
         appendStepBody(step2, formatResponse(200, respHeaders, psResBody));
-        appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), "auth_token"));
+        appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), "auth_token decoded"));
       } else if (psRes.status === 202) {
         resolveStep(step2, "success", labels.postLabelResolved(psPath, 202));
         appendStepBody(step2, formatResponse(202, respHeaders, psResBody));
@@ -4361,7 +4365,7 @@ ${renderJSON(body)}`;
         resourceToken = body.resource_token;
         resolveStep(step1, "success", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
         appendStepBody(step1, formatResponse(res.status, null, body));
-        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token"));
+        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token decoded"));
         await previewR3Document(decodeJWTPayloadBrowser(resourceToken));
       } else {
         resolveStep(step1, "error", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
@@ -4402,7 +4406,7 @@ ${renderJSON(body)}`;
     addLogStep(
       copy("notes.auth_token_received.label"),
       "success",
-      desc("notes.auth_token_received") + formatDecoded(decodeJWTBrowser(authToken), "auth_token") + anotherRequestButton(),
+      desc("notes.auth_token_received") + formatDecoded(decodeJWTBrowser(authToken), "auth_token decoded") + anotherRequestButton(),
       { kind: "response" }
     );
     revealNotesApp();

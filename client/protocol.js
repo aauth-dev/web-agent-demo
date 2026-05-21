@@ -501,17 +501,26 @@ function tokenWrap(innerHtml, extraClass = '') {
   </div>`
 }
 
+// The signed headers carry long opaque blobs — base64 signatures and a
+// full JWT in Signature-Key. Elide long base64/JWT runs (keeping a short
+// prefix) so the request box stays readable, the way the old narration
+// abbreviated them. Short values (Content-Type, created=…) are untouched.
+function truncateHeaderValue(value) {
+  return String(value).replace(/[A-Za-z0-9_\-+/]{20,}={0,2}/g, (run) => `${run.slice(0, 8)}…`)
+}
+
 // Render the HTTP request: the full request line first (METHOD + full
 // URL, e.g. "GET https://whoami.aauth.dev/?scope=…"), then a blank
 // line, then the signed headers (Content-Type, Signature-*, …), then a
 // blank line and the body. Leading with the request line surfaces the
 // target — including the query string (?scope=…) — in the box itself
-// rather than relying on the step heading alone.
+// rather than relying on the step heading alone. Header values are
+// truncated so the long signature/JWT bytes don't dominate the box.
 function formatRequest(method, url, headers, body) {
   let inner = `${escapeHtml(method)} ${escapeHtml(url)}`
   if (headers) {
     const lines = Object.entries(headers)
-      .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`)
+      .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(truncateHeaderValue(v))}`)
     if (lines.length) inner += `\n\n${lines.join('\n')}`
   }
   if (body) {
@@ -570,7 +579,7 @@ function formatAuthToken(token) {
   return `
     ${tokenWrap(renderEncodedJWT(token), 'encoded')}
     <details class="section-group" open>
-      <summary class="section-heading"><span>auth_token</span>${CHEVRON_SVG}</summary>
+      <summary class="section-heading"><span>auth_token decoded</span>${CHEVRON_SVG}</summary>
       ${tokenWrap(renderJSON(decodeJWTBrowser(token)), 'token-display-response')}
     </details>
   `
@@ -643,7 +652,7 @@ async function runBootstrap(psUrl) {
     }
     resolveStep(reqStep, 'success', fmt(copy('bootstrap.agent_provider_request.label_resolved_template'), { path: '/bootstrap' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token decoded'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('bootstrap.agent_provider_request.label_error_network_template'), { path: '/bootstrap' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -709,7 +718,7 @@ async function runRefresh() {
     }
     resolveStep(reqStep, 'success', fmt(copy('refresh.agent_provider_request.label_resolved_template'), { path: '/refresh' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token decoded'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('refresh.agent_provider_request.label_error_network_template'), { path: '/refresh' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -853,7 +862,7 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
   // Step 1: unauthenticated-for-user GET. Agent token proves the agent's
   // identity but carries no user claims, so whoami bounces with a
   // resource_token the agent can trade at the PS.
-  const step1 = addLogStep(`Agent → Whoami: GET ${whoamiPathDisplay}`, 'pending',
+  const step1 = addLogStep(`Agent → Whoami`, 'pending',
     `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>`)
 
   let resourceToken
@@ -880,7 +889,7 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
     // claims. No PS exchange step — render the body as the final
     // response and end the flow.
     if (res.status === 200) {
-      resolveStep(step1, 'success', `Agent → Whoami: GET ${whoamiPathDisplay}`)
+      resolveStep(step1, 'success', `Agent → Whoami`)
       appendStepBody(step1, formatResponse(200, respHeaders, body))
       addLogStep('Agent identity received', 'success',
         `<p>No scopes were requested, so whoami returned the agent's own identity straight from the agent_token — no Person Server exchange needed.</p>` +
@@ -896,16 +905,16 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
       // but visually the step border tracks the HTTP status (red)
       // rather than the protocol-level outcome, so the line color
       // matches the "HTTP 401" the user is reading inside the box.
-      resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
+      resolveStep(step1, 'error', `Agent → Whoami`)
       appendStepBody(step1, formatResponse(401, respHeaders, body))
-      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token decoded'))
     } else {
-      resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
+      resolveStep(step1, 'error', `Agent → Whoami`)
       appendStepBody(step1, formatResponse(res.status, respHeaders, body) + anotherRequestButton())
       return
     }
   } catch (err) {
-    resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay} (network error)`)
+    resolveStep(step1, 'error', `Agent → Whoami (network error)`)
     appendStepBody(step1, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>` + anotherRequestButton())
     return
   }
@@ -922,14 +931,14 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
     agentToken,
     signingJwk,
     labels: {
-      postLabel: (path) => `Agent → Person Server: POST ${path}`,
+      postLabel: (path) => `Agent → Person Server`,
       postLabelResolved: (path, status) =>
         status === 200 || status === 202
-          ? `Agent → Person Server: POST ${path}`
-          : `Agent → Person Server: POST ${path} → ${status}`,
-      postLabelNetworkError: (path) => `Agent → Person Server: POST ${path} (network error)`,
+          ? `Agent → Person Server`
+          : `Agent → Person Server → ${status}`,
+      postLabelNetworkError: (path) => `Agent → Person Server (network error)`,
       postDescription: `<p>Agent presents the resource_token and its agent_token to the Person Server's token endpoint. The PS either releases an auth_token immediately (cached consent) or returns a 202 with a consent prompt.</p>`,
-      pollLabel: (path) => `Agent → Person Server: GET ${path} (long-poll)`,
+      pollLabel: (path) => `Agent → Person Server (long-poll)`,
       pollDescription: `<p>Agent keeps a request open while you decide, instead of polling. The Person Server answers the moment you approve or deny.</p>`,
       consentLabel: copy('authorize.ps_consent_prompt.label'),
       consentDescription: desc('authorize.ps_consent_prompt'),
@@ -955,13 +964,13 @@ function showWhoamiAuthTokenReceived(authToken) {
   // above" copy would have nothing to point at.
   addLogStep('Auth Token received', 'success',
     `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` +
-    formatDecoded(decodeJWTBrowser(authToken), 'auth_token'),
+    formatDecoded(decodeJWTBrowser(authToken), 'auth_token decoded'),
     { kind: 'response' }
   )
 }
 
 async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, signingJwk) {
-  const step = addLogStep(`Agent → Whoami: GET ${whoamiPathDisplay}`, 'pending',
+  const step = addLogStep(`Agent → Whoami`, 'pending',
     `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>`)
   try {
     const { response: res, sent } = await sigFetch(whoamiUrl, {
@@ -974,7 +983,7 @@ async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, sig
     })
     appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const body = await res.json().catch(() => null)
-    resolveStep(step, res.ok ? 'success' : 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
+    resolveStep(step, res.ok ? 'success' : 'error', `Agent → Whoami`)
     if (res.ok) {
       // Skip the generic Response block — the "Identity claims received"
       // step below renders the same JSON as the protocol-level response,
@@ -990,7 +999,7 @@ async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, sig
       appendStepBody(step, anotherRequestButton())
     }
   } catch (err) {
-    resolveStep(step, 'error', `Agent → Whoami: GET ${whoamiPathDisplay} (network error)`)
+    resolveStep(step, 'error', `Agent → Whoami (network error)`)
     appendStepBody(step, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>` + anotherRequestButton())
   }
 }
@@ -1310,6 +1319,11 @@ async function runPSTokenExchange({
       returnSent: true,
     })
     appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
+    // Surface the resource_token being exchanged, decoded, the same way
+    // the whoami/notes step above showed it. Duplicated on purpose: it
+    // makes the POST self-contained — you can see exactly which token is
+    // being traded for the auth_token.
+    appendStepBody(step2, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token decoded'))
     const psResBody = await psRes.json().catch(() => null)
     const respHeaders = {}
     for (const key of ['location', 'retry-after', 'aauth-requirement']) {
@@ -1321,7 +1335,7 @@ async function runPSTokenExchange({
       authToken = psResBody.auth_token
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 200))
       appendStepBody(step2, formatResponse(200, respHeaders, psResBody))
-      appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), 'auth_token'))
+      appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), 'auth_token decoded'))
       // Falls through to the post-200 handoff below.
     } else if (psRes.status === 202) {
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 202))
@@ -1863,7 +1877,7 @@ async function runNotesAuthorize(operations, bindingPs, hints) {
       resourceToken = body.resource_token
       resolveStep(step1, 'success', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
       appendStepBody(step1, formatResponse(res.status, null, body))
-      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token decoded'))
       await previewR3Document(decodeJWTPayloadBrowser(resourceToken))
     } else {
       resolveStep(step1, 'error', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
@@ -1915,7 +1929,7 @@ async function finalizeNotesAuthToken(authToken) {
   localStorage.setItem(NOTES_AUTH_TOKEN_KEY, authToken)
   addLogStep(copy('notes.auth_token_received.label'), 'success',
     desc('notes.auth_token_received') +
-      formatDecoded(decodeJWTBrowser(authToken), 'auth_token') +
+      formatDecoded(decodeJWTBrowser(authToken), 'auth_token decoded') +
       anotherRequestButton(),
     { kind: 'response' }
   )
