@@ -23,14 +23,24 @@ export function emit(c: Context<HonoEnv>, input: EmitInput): void {
     level: 30,
     ...input,
   }
-  c.executionCtx.waitUntil(
-    c.env.EVENTS_QUEUE.send(full).catch((err: unknown) =>
-      console.error('event_emit_failed', {
-        error: String(err),
-        event: input.event,
-      })
+  try {
+    c.executionCtx.waitUntil(
+      c.env.EVENTS_QUEUE.send(full).catch((err: unknown) =>
+        console.error('event_emit_failed', {
+          error: String(err),
+          event: input.event,
+        })
+      )
     )
-  )
+  } catch (err) {
+    // No ExecutionContext (e.g. test env) or missing EVENTS_QUEUE binding —
+    // accessing c.executionCtx / .send() throws synchronously. Swallow it:
+    // event emission must never break the request path.
+    console.error('event_emit_failed', {
+      error: String(err),
+      event: input.event,
+    })
+  }
 }
 
 // Convenience wrapper for verify_failed events.
