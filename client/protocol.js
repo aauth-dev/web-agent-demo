@@ -501,24 +501,22 @@ function tokenWrap(innerHtml, extraClass = '') {
   </div>`
 }
 
-// Render the actual on-the-wire HTTP request: headers + body, no
-// synthetic "METHOD url" line. The step heading already names the
-// route (e.g. "Agent → Agent Provider: POST /bootstrap"), and the
-// method/URL aren't part of what gets transmitted at the wire level
-// — what matters here is the headers (Content-Type, Signature-*,
-// Authorization, …) and the body.
+// Render the HTTP request: the full request line first (METHOD + full
+// URL, e.g. "GET https://whoami.aauth.dev/?scope=…"), then a blank
+// line, then the signed headers (Content-Type, Signature-*, …), then a
+// blank line and the body. Leading with the request line surfaces the
+// target — including the query string (?scope=…) — in the box itself
+// rather than relying on the step heading alone.
 function formatRequest(method, url, headers, body) {
-  let inner = ''
+  let inner = `${escapeHtml(method)} ${escapeHtml(url)}`
   if (headers) {
-    for (const [k, v] of Object.entries(headers)) {
-      inner += `${escapeHtml(k)}: ${escapeHtml(v)}\n`
-    }
+    const lines = Object.entries(headers)
+      .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`)
+    if (lines.length) inner += `\n\n${lines.join('\n')}`
   }
   if (body) {
-    if (inner) inner += '\n'
-    inner += renderJSON(body)
+    inner += `\n\n${renderJSON(body)}`
   }
-  if (!inner) inner = `${escapeHtml(method)} ${escapeHtml(url)}`
   return `<div class="token-label token-label-request">Request</div>${tokenWrap(inner, 'token-display-request')}`
 }
 
@@ -548,12 +546,12 @@ function formatToken(label, token, decoded, payloadLabel) {
   `
 }
 
-// Decoded JWT payload as its own open <details>. Used on its own
-// (e.g., under a /pending or /verify response block) to surface the
-// decoded payload alongside the raw response. The label names the
-// token kind so the user can match it back to whichever token the
-// response carried (agent_token, resource_token, auth_token).
-function formatDecoded(decoded, label = 'payload') {
+// Decoded JWT as its own open <details>. Callers pass the full
+// { header, payload } (via decodeJWTBrowser) so both halves show
+// alongside the raw response. The label names the token kind
+// (agent_token, resource_token, auth_token) so the user can match it
+// back to whichever token the response carried.
+function formatDecoded(decoded, label = 'token') {
   // Decoded payloads are derived from the previous response body, so
   // tint the inner box with the response color to keep the visual
   // chain (Response box → decoded payload) reading as one thread.
@@ -572,8 +570,8 @@ function formatAuthToken(token) {
   return `
     ${tokenWrap(renderEncodedJWT(token), 'encoded')}
     <details class="section-group" open>
-      <summary class="section-heading"><span>auth_token payload</span>${CHEVRON_SVG}</summary>
-      ${tokenWrap(renderJSON(decodeJWTPayloadBrowser(token)), 'token-display-response')}
+      <summary class="section-heading"><span>auth_token</span>${CHEVRON_SVG}</summary>
+      ${tokenWrap(renderJSON(decodeJWTBrowser(token)), 'token-display-response')}
     </details>
   `
 }
@@ -645,7 +643,7 @@ async function runBootstrap(psUrl) {
     }
     resolveStep(reqStep, 'success', fmt(copy('bootstrap.agent_provider_request.label_resolved_template'), { path: '/bootstrap' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), 'agent_token payload'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('bootstrap.agent_provider_request.label_error_network_template'), { path: '/bootstrap' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -711,7 +709,7 @@ async function runRefresh() {
     }
     resolveStep(reqStep, 'success', fmt(copy('refresh.agent_provider_request.label_resolved_template'), { path: '/refresh' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), 'agent_token payload'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('refresh.agent_provider_request.label_error_network_template'), { path: '/refresh' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -900,7 +898,7 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
       // matches the "HTTP 401" the user is reading inside the box.
       resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
       appendStepBody(step1, formatResponse(401, respHeaders, body))
-      appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), 'resource_token payload'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
     } else {
       resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
       appendStepBody(step1, formatResponse(res.status, respHeaders, body) + anotherRequestButton())
@@ -957,7 +955,7 @@ function showWhoamiAuthTokenReceived(authToken) {
   // above" copy would have nothing to point at.
   addLogStep('Auth Token received', 'success',
     `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` +
-    formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload'),
+    formatDecoded(decodeJWTBrowser(authToken), 'auth_token'),
     { kind: 'response' }
   )
 }
@@ -982,7 +980,7 @@ async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, sig
       // step below renders the same JSON as the protocol-level response,
       // so surfacing both just duplicates the payload.
       addLogStep('Identity claims received', 'success',
-        `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token payload above — whoami returns them verbatim from the token.</p>` +
+        `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token above — whoami returns them verbatim from the token's payload.</p>` +
         tokenWrap(renderJSON(body)) +
         anotherRequestButton(),
         { kind: 'response' }
@@ -1323,7 +1321,7 @@ async function runPSTokenExchange({
       authToken = psResBody.auth_token
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 200))
       appendStepBody(step2, formatResponse(200, respHeaders, psResBody))
-      appendStepBody(step2, formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload'))
+      appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), 'auth_token'))
       // Falls through to the post-200 handoff below.
     } else if (psRes.status === 202) {
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 202))
@@ -1539,6 +1537,20 @@ function decodeJWTPayloadBrowser(jwt) {
   try {
     const parts = jwt.split('.')
     return JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return null
+  }
+}
+
+// Decode both segments of a JWT for display: { header, payload }.
+// Programmatic callers that only need a single claim use
+// decodeJWTPayloadBrowser; the log surfaces both halves so the user can
+// see the signing alg/typ in the header alongside the claims.
+function decodeJWTBrowser(jwt) {
+  try {
+    const parts = jwt.split('.')
+    const seg = (s) => JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')))
+    return { header: seg(parts[0]), payload: seg(parts[1]) }
   } catch {
     return null
   }
@@ -1851,7 +1863,7 @@ async function runNotesAuthorize(operations, bindingPs, hints) {
       resourceToken = body.resource_token
       resolveStep(step1, 'success', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
       appendStepBody(step1, formatResponse(res.status, null, body))
-      appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), 'resource_token payload'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
       await previewR3Document(decodeJWTPayloadBrowser(resourceToken))
     } else {
       resolveStep(step1, 'error', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
@@ -1903,7 +1915,7 @@ async function finalizeNotesAuthToken(authToken) {
   localStorage.setItem(NOTES_AUTH_TOKEN_KEY, authToken)
   addLogStep(copy('notes.auth_token_received.label'), 'success',
     desc('notes.auth_token_received') +
-      formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload') +
+      formatDecoded(decodeJWTBrowser(authToken), 'auth_token') +
       anotherRequestButton(),
     { kind: 'response' }
   )

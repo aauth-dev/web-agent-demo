@@ -3356,18 +3356,18 @@
   </div>`;
   }
   function formatRequest(method, url, headers, body) {
-    let inner = "";
+    let inner = `${escapeHtml(method)} ${escapeHtml(url)}`;
     if (headers) {
-      for (const [k, v] of Object.entries(headers)) {
-        inner += `${escapeHtml(k)}: ${escapeHtml(v)}
-`;
-      }
+      const lines = Object.entries(headers).map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`);
+      if (lines.length) inner += `
+
+${lines.join("\n")}`;
     }
     if (body) {
-      if (inner) inner += "\n";
-      inner += renderJSON(body);
+      inner += `
+
+${renderJSON(body)}`;
     }
-    if (!inner) inner = `${escapeHtml(method)} ${escapeHtml(url)}`;
     return `<div class="token-label token-label-request">Request</div>${tokenWrap(inner, "token-display-request")}`;
   }
   function formatResponse(status, headers, body) {
@@ -3385,7 +3385,7 @@ ${renderJSON(body)}`;
     }
     return `<div class="token-label token-label-response">Response</div>${tokenWrap(inner, "token-display-response")}`;
   }
-  function formatDecoded(decoded, label = "payload") {
+  function formatDecoded(decoded, label = "token") {
     return `
     <details class="section-group" open>
       <summary class="section-heading"><span>${escapeHtml(label)}</span>${CHEVRON_SVG}</summary>
@@ -3397,8 +3397,8 @@ ${renderJSON(body)}`;
     return `
     ${tokenWrap(renderEncodedJWT(token), "encoded")}
     <details class="section-group" open>
-      <summary class="section-heading"><span>auth_token payload</span>${CHEVRON_SVG}</summary>
-      ${tokenWrap(renderJSON(decodeJWTPayloadBrowser(token)), "token-display-response")}
+      <summary class="section-heading"><span>auth_token</span>${CHEVRON_SVG}</summary>
+      ${tokenWrap(renderJSON(decodeJWTBrowser(token)), "token-display-response")}
     </details>
   `;
   }
@@ -3447,7 +3447,7 @@ ${renderJSON(body)}`;
       }
       resolveStep(reqStep, "success", fmt(copy("bootstrap.agent_provider_request.label_resolved_template"), { path: "/bootstrap" }) + ` \u2192 ${res.status}`);
       appendStepBody(reqStep, formatResponse(res.status, null, result));
-      appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), "agent_token payload"));
+      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token"));
     } catch (err) {
       resolveStep(reqStep, "error", fmt(copy("bootstrap.agent_provider_request.label_error_network_template"), { path: "/bootstrap" }));
       appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
@@ -3507,7 +3507,7 @@ ${renderJSON(body)}`;
       }
       resolveStep(reqStep, "success", fmt(copy("refresh.agent_provider_request.label_resolved_template"), { path: "/refresh" }) + ` \u2192 ${res.status}`);
       appendStepBody(reqStep, formatResponse(res.status, null, result));
-      appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), "agent_token payload"));
+      appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), "agent_token"));
     } catch (err) {
       resolveStep(reqStep, "error", fmt(copy("refresh.agent_provider_request.label_error_network_template"), { path: "/refresh" }));
       appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`);
@@ -3625,7 +3625,7 @@ ${renderJSON(body)}`;
       if (res.status === 401 && resourceToken) {
         resolveStep(step1, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
         appendStepBody(step1, formatResponse(401, respHeaders, body));
-        appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), "resource_token payload"));
+        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token"));
       } else {
         resolveStep(step1, "error", `Agent \u2192 Whoami: GET ${whoamiPathDisplay}`);
         appendStepBody(step1, formatResponse(res.status, respHeaders, body) + anotherRequestButton());
@@ -3665,7 +3665,7 @@ ${renderJSON(body)}`;
     addLogStep(
       "Auth Token received",
       "success",
-      `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` + formatDecoded(decodeJWTPayloadBrowser(authToken), "auth_token payload"),
+      `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` + formatDecoded(decodeJWTBrowser(authToken), "auth_token"),
       { kind: "response" }
     );
   }
@@ -3691,7 +3691,7 @@ ${renderJSON(body)}`;
         addLogStep(
           "Identity claims received",
           "success",
-          `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token payload above \u2014 whoami returns them verbatim from the token.</p>` + tokenWrap(renderJSON(body)) + anotherRequestButton(),
+          `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token above \u2014 whoami returns them verbatim from the token's payload.</p>` + tokenWrap(renderJSON(body)) + anotherRequestButton(),
           { kind: "response" }
         );
       } else {
@@ -3932,7 +3932,7 @@ ${renderJSON(body)}`;
         authToken = psResBody.auth_token;
         resolveStep(step2, "success", labels.postLabelResolved(psPath, 200));
         appendStepBody(step2, formatResponse(200, respHeaders, psResBody));
-        appendStepBody(step2, formatDecoded(decodeJWTPayloadBrowser(authToken), "auth_token payload"));
+        appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), "auth_token"));
       } else if (psRes.status === 202) {
         resolveStep(step2, "success", labels.postLabelResolved(psPath, 202));
         appendStepBody(step2, formatResponse(202, respHeaders, psResBody));
@@ -4109,6 +4109,15 @@ ${renderJSON(body)}`;
     try {
       const parts = jwt.split(".");
       return JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    } catch {
+      return null;
+    }
+  }
+  function decodeJWTBrowser(jwt) {
+    try {
+      const parts = jwt.split(".");
+      const seg = (s) => JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
+      return { header: seg(parts[0]), payload: seg(parts[1]) };
     } catch {
       return null;
     }
@@ -4352,7 +4361,7 @@ ${renderJSON(body)}`;
         resourceToken = body.resource_token;
         resolveStep(step1, "success", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
         appendStepBody(step1, formatResponse(res.status, null, body));
-        appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), "resource_token payload"));
+        appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), "resource_token"));
         await previewR3Document(decodeJWTPayloadBrowser(resourceToken));
       } else {
         resolveStep(step1, "error", fmt(copy("notes.authorize_request.label_resolved_template"), { path: authzPath, status: res.status }));
@@ -4393,7 +4402,7 @@ ${renderJSON(body)}`;
     addLogStep(
       copy("notes.auth_token_received.label"),
       "success",
-      desc("notes.auth_token_received") + formatDecoded(decodeJWTPayloadBrowser(authToken), "auth_token payload") + anotherRequestButton(),
+      desc("notes.auth_token_received") + formatDecoded(decodeJWTBrowser(authToken), "auth_token") + anotherRequestButton(),
       { kind: "response" }
     );
     revealNotesApp();
