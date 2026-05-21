@@ -359,7 +359,7 @@ function renderPSChooser() {
   if (!isDevMode()) return
   const list = document.getElementById('ps-list')
   if (!list) return
-  list.innerHTML = PS_OPTIONS.map((opt, i) => `
+  list.innerHTML = PS_OPTIONS.map((opt) => `
     <li>
       <label class="radio-label">
         <input type="radio" name="ps-choice" value="${opt.url}"${opt.url === DEFAULT_PS ? ' checked' : ''}>

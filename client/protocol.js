@@ -57,6 +57,23 @@ function trace(label, extra) {
   try { console.log(`[aauth] ${label}`, extra ?? '') } catch {}
 }
 
+// Convert a Headers object (returned in sent.headers from @hellocoop/httpsig
+// with returnSent: true) to a plain object that formatRequest renders.
+function headersToObject(headers) {
+  const out = {}
+  // sent.headers is a Headers instance; iterate via .forEach
+  headers.forEach((value, key) => { out[key] = value })
+  return out
+}
+
+// Best-effort JSON parse for a captured request body (sent.body is a string
+// for our POST sites). Returns the parsed value, or the raw string, or null.
+function tryParseBody(body) {
+  if (body == null) return null
+  if (typeof body !== 'string') return body
+  try { return JSON.parse(body) } catch { return body }
+}
+
 // Signed fetch helpers exposed for app.js (which can't import sigFetch
 // directly since it isn't bundled).
 //   aauthSigFetch    — sig=jwt (agent_token or auth_token)
@@ -484,24 +501,22 @@ function tokenWrap(innerHtml, extraClass = '') {
   </div>`
 }
 
-// Render the actual on-the-wire HTTP request: headers + body, no
-// synthetic "METHOD url" line. The step heading already names the
-// route (e.g. "Agent → Agent Provider: POST /bootstrap"), and the
-// method/URL aren't part of what gets transmitted at the wire level
-// — what matters here is the headers (Content-Type, Signature-*,
-// Authorization, …) and the body.
+// Render the HTTP request: the full request line first (METHOD + full
+// URL, e.g. "GET https://whoami.aauth.dev/?scope=…"), then a blank
+// line, then the signed headers (Content-Type, Signature-*, …), then a
+// blank line and the body. Leading with the request line surfaces the
+// target — including the query string (?scope=…) — in the box itself
+// rather than relying on the step heading alone.
 function formatRequest(method, url, headers, body) {
-  let inner = ''
+  let inner = `${escapeHtml(method)} ${escapeHtml(url)}`
   if (headers) {
-    for (const [k, v] of Object.entries(headers)) {
-      inner += `${escapeHtml(k)}: ${escapeHtml(v)}\n`
-    }
+    const lines = Object.entries(headers)
+      .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`)
+    if (lines.length) inner += `\n\n${lines.join('\n')}`
   }
   if (body) {
-    if (inner) inner += '\n'
-    inner += renderJSON(body)
+    inner += `\n\n${renderJSON(body)}`
   }
-  if (!inner) inner = `${escapeHtml(method)} ${escapeHtml(url)}`
   return `<div class="token-label token-label-request">Request</div>${tokenWrap(inner, 'token-display-request')}`
 }
 
@@ -531,12 +546,12 @@ function formatToken(label, token, decoded, payloadLabel) {
   `
 }
 
-// Decoded JWT payload as its own open <details>. Used on its own
-// (e.g., under a /pending or /verify response block) to surface the
-// decoded payload alongside the raw response. The label names the
-// token kind so the user can match it back to whichever token the
-// response carried (agent_token, resource_token, auth_token).
-function formatDecoded(decoded, label = 'payload') {
+// Decoded JWT as its own open <details>. Callers pass the full
+// { header, payload } (via decodeJWTBrowser) so both halves show
+// alongside the raw response. The label names the token kind
+// (agent_token, resource_token, auth_token) so the user can match it
+// back to whichever token the response carried.
+function formatDecoded(decoded, label = 'token') {
   // Decoded payloads are derived from the previous response body, so
   // tint the inner box with the response color to keep the visual
   // chain (Response box → decoded payload) reading as one thread.
@@ -555,8 +570,8 @@ function formatAuthToken(token) {
   return `
     ${tokenWrap(renderEncodedJWT(token), 'encoded')}
     <details class="section-group" open>
-      <summary class="section-heading"><span>auth_token payload</span>${CHEVRON_SVG}</summary>
-      ${tokenWrap(renderJSON(decodeJWTPayloadBrowser(token)), 'token-display-response')}
+      <summary class="section-heading"><span>auth_token</span>${CHEVRON_SVG}</summary>
+      ${tokenWrap(renderJSON(decodeJWTBrowser(token)), 'token-display-response')}
     </details>
   `
 }
@@ -603,18 +618,12 @@ async function runBootstrap(psUrl) {
   const endpoint = `${window.location.origin}/bootstrap`
   const body = { ps: psUrl }
   const reqStep = addLogStep(fmt(copy('bootstrap.agent_provider_request.label_template'), { path: '/bootstrap' }), 'pending',
-    desc('bootstrap.agent_provider_request') +
-    formatRequest('POST', endpoint, {
-      'Content-Type': 'application/json',
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`,
-    }, body)
-  )
+    desc('bootstrap.agent_provider_request'))
 
   let result
+  let res
   try {
-    const res = await sigFetch(endpoint, {
+    const { response, sent } = await sigFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -622,7 +631,10 @@ async function runBootstrap(psUrl) {
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'hwk' },
       components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      returnSent: true,
     })
+    res = response
+    appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     result = await res.json().catch(() => null)
     if (!res.ok || !result?.agent_token) {
       resolveStep(reqStep, 'error', fmt(copy('bootstrap.agent_provider_request.label_resolved_template'), { path: '/bootstrap' }) + ` → ${res.status}`)
@@ -631,7 +643,7 @@ async function runBootstrap(psUrl) {
     }
     resolveStep(reqStep, 'success', fmt(copy('bootstrap.agent_provider_request.label_resolved_template'), { path: '/bootstrap' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), 'agent_token payload'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('bootstrap.agent_provider_request.label_error_network_template'), { path: '/bootstrap' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -672,18 +684,12 @@ async function runRefresh() {
 
   const endpoint = `${window.location.origin}/refresh`
   const reqStep = addLogStep(fmt(copy('refresh.agent_provider_request.label_template'), { path: '/refresh' }), 'pending',
-    desc('refresh.agent_provider_request') +
-    formatRequest('POST', endpoint, {
-      'Content-Type': 'application/json',
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=hwk;kty="${publicJwk.kty}";crv="${publicJwk.crv}";x="${publicJwk.x}"`,
-    }, body)
-  )
+    desc('refresh.agent_provider_request'))
 
   let result
+  let res
   try {
-    const res = await sigFetch(endpoint, {
+    const { response, sent } = await sigFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -691,7 +697,10 @@ async function runRefresh() {
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'hwk' },
       components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      returnSent: true,
     })
+    res = response
+    appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     result = await res.json().catch(() => null)
     if (!res.ok || !result?.agent_token) {
       resolveStep(reqStep, 'error', fmt(copy('refresh.agent_provider_request.label_resolved_template'), { path: '/refresh' }) + ` → ${res.status}`)
@@ -700,7 +709,7 @@ async function runRefresh() {
     }
     resolveStep(reqStep, 'success', fmt(copy('refresh.agent_provider_request.label_resolved_template'), { path: '/refresh' }) + ` → ${res.status}`)
     appendStepBody(reqStep, formatResponse(res.status, null, result))
-    appendStepBody(reqStep, formatDecoded(decodeJWTPayloadBrowser(result.agent_token), 'agent_token payload'))
+    appendStepBody(reqStep, formatDecoded(decodeJWTBrowser(result.agent_token), 'agent_token'))
   } catch (err) {
     resolveStep(reqStep, 'error', fmt(copy('refresh.agent_provider_request.label_error_network_template'), { path: '/refresh' }))
     appendStepBody(reqStep, `<p style="color: var(--error)">${escapeHtml(err.message)}</p>`)
@@ -845,23 +854,19 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
   // identity but carries no user claims, so whoami bounces with a
   // resource_token the agent can trade at the PS.
   const step1 = addLogStep(`Agent → Whoami: GET ${whoamiPathDisplay}`, 'pending',
-    `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>` +
-    formatRequest('GET', whoamiUrl, {
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`,
-    }, null)
-  )
+    `<p>Agent calls whoami with its agent_token. The resource knows the agent but has no user claims yet, so it returns 401 with a resource_token the agent can exchange at the Person Server.</p>`)
 
   let resourceToken
   try {
-    const res = await sigFetch(whoamiUrl, {
+    const { response: res, sent } = await sigFetch(whoamiUrl, {
       method: 'GET',
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: agentToken },
       components: ['@method', '@authority', '@path', 'signature-key'],
+      returnSent: true,
     })
+    appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const body = await res.json().catch(() => null)
     const requirement = res.headers.get('aauth-requirement') || ''
     const respHeaders = {}
@@ -893,7 +898,7 @@ async function runWhoamiCall(whoamiUrl, bindingPs, hints) {
       // matches the "HTTP 401" the user is reading inside the box.
       resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
       appendStepBody(step1, formatResponse(401, respHeaders, body))
-      appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), 'resource_token payload'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
     } else {
       resolveStep(step1, 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
       appendStepBody(step1, formatResponse(res.status, respHeaders, body) + anotherRequestButton())
@@ -950,28 +955,24 @@ function showWhoamiAuthTokenReceived(authToken) {
   // above" copy would have nothing to point at.
   addLogStep('Auth Token received', 'success',
     `<p>The Person Server released an auth_token for the requested whoami scopes. The agent will use this to sign the next call to Whoami.</p>` +
-    formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload'),
+    formatDecoded(decodeJWTBrowser(authToken), 'auth_token'),
     { kind: 'response' }
   )
 }
 
 async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, signingJwk) {
   const step = addLogStep(`Agent → Whoami: GET ${whoamiPathDisplay}`, 'pending',
-    `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>` +
-    formatRequest('GET', whoamiUrl, {
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=jwt;jwt="${authToken?.substring(0, 20)}..."`,
-    }, null)
-  )
+    `<p>Same GET as before, now signed with the auth_token. Whoami verifies the token against the Person Server's JWKS, checks that 'whoami' is in scope, and returns the identity claims carried in the payload.</p>`)
   try {
-    const res = await sigFetch(whoamiUrl, {
+    const { response: res, sent } = await sigFetch(whoamiUrl, {
       method: 'GET',
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: authToken },
       components: ['@method', '@authority', '@path', 'signature-key'],
+      returnSent: true,
     })
+    appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const body = await res.json().catch(() => null)
     resolveStep(step, res.ok ? 'success' : 'error', `Agent → Whoami: GET ${whoamiPathDisplay}`)
     if (res.ok) {
@@ -979,7 +980,7 @@ async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, sig
       // step below renders the same JSON as the protocol-level response,
       // so surfacing both just duplicates the payload.
       addLogStep('Identity claims received', 'success',
-        `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token payload above — whoami returns them verbatim from the token.</p>` +
+        `<p>These are the claims the Person Server released for the scopes you granted. Compare them against the decoded auth_token above — whoami returns them verbatim from the token's payload.</p>` +
         tokenWrap(renderJSON(body)) +
         anotherRequestButton(),
         { kind: 'response' }
@@ -1294,19 +1295,11 @@ async function runPSTokenExchange({
     provider_hint: 'email--',
   }
 
-  const step2 = addLogStep(labels.postLabel(psPath), 'pending',
-    labels.postDescription +
-    formatRequest('POST', tokenEndpoint, {
-      'Content-Type': 'application/json',
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`,
-    }, psBody),
-  )
+  const step2 = addLogStep(labels.postLabel(psPath), 'pending', labels.postDescription)
 
   let authToken
   try {
-    const psRes = await sigFetch(tokenEndpoint, {
+    const { response: psRes, sent } = await sigFetch(tokenEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(psBody),
@@ -1314,7 +1307,9 @@ async function runPSTokenExchange({
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: agentToken },
       components: ['@method', '@authority', '@path', 'signature-key'],
+      returnSent: true,
     })
+    appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const psResBody = await psRes.json().catch(() => null)
     const respHeaders = {}
     for (const key of ['location', 'retry-after', 'aauth-requirement']) {
@@ -1326,7 +1321,7 @@ async function runPSTokenExchange({
       authToken = psResBody.auth_token
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 200))
       appendStepBody(step2, formatResponse(200, respHeaders, psResBody))
-      appendStepBody(step2, formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload'))
+      appendStepBody(step2, formatDecoded(decodeJWTBrowser(authToken), 'auth_token'))
       // Falls through to the post-200 handoff below.
     } else if (psRes.status === 202) {
       resolveStep(step2, 'success', labels.postLabelResolved(psPath, 202))
@@ -1345,14 +1340,9 @@ async function runPSTokenExchange({
       if (pollUrl) {
         const absolutePollUrl = new URL(pollUrl, tokenEndpoint).href
         pollStep = addLogStep(labels.pollLabel(new URL(absolutePollUrl).pathname), 'pending',
-          labels.pollDescription +
-          formatRequest('GET', absolutePollUrl, {
-            'Prefer': `wait=${POLL_WAIT_SECONDS}`,
-            'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-            'Signature': 'sig=:...:',
-            'Signature-Key': `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`,
-          }, null),
-        )
+          labels.pollDescription)
+        // Real signed-request headers + body are filled in by pollPendingAuthorize
+        // on its first cycle so we don't repeat fabricated placeholders here.
         if (pollStep) {
           pollStep.dataset.pollKey = consentKey
           persistActiveLog()
@@ -1451,28 +1441,26 @@ async function _startAuthTokenPollingImpl(pollUrl, baseUrl, interactionStep, pol
   // When not provided (resume paths), fall back to creating it inline.
   if (!pollStep) {
     pollStep = addLogStep(fmt(copy('authorize.ps_pending_longpoll.label_template'), { path: pollPath }), 'pending',
-      desc('authorize.ps_pending_longpoll') +
-      formatRequest('GET', absolutePollUrl, {
-        'Prefer': `wait=${POLL_WAIT_SECONDS}`,
-        'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-        'Signature': 'sig=:...:',
-        'Signature-Key': `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`,
-      }, null)
-    )
+      desc('authorize.ps_pending_longpoll'))
   }
 
   let cycle = 0
   while (true) {
     cycle++
     try {
-      const res = await sigFetch(absolutePollUrl, {
+      const { response: res, sent } = await sigFetch(absolutePollUrl, {
         method: 'GET',
         headers: { Prefer: `wait=${POLL_WAIT_SECONDS}` },
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: 'jwt', jwt: agentToken },
         components: ['@method', '@authority', '@path', 'signature-key'],
+        returnSent: true,
       })
+      // Show the real signed request once, on the first poll cycle.
+      if (cycle === 1) {
+        appendStepBody(pollStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
+      }
       const respHeaders = {}
       for (const key of ['retry-after', 'aauth-requirement']) {
         const v = res.headers.get(key)
@@ -1549,6 +1537,20 @@ function decodeJWTPayloadBrowser(jwt) {
   try {
     const parts = jwt.split('.')
     return JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return null
+  }
+}
+
+// Decode both segments of a JWT for display: { header, payload }.
+// Programmatic callers that only need a single claim use
+// decodeJWTPayloadBrowser; the log surfaces both halves so the user can
+// see the signing alg/typ in the header alongside the claims.
+function decodeJWTBrowser(jwt) {
+  try {
+    const parts = jwt.split('.')
+    const seg = (s) => JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')))
+    return { header: seg(parts[0]), payload: seg(parts[1]) }
   } catch {
     return null
   }
@@ -1841,17 +1843,11 @@ async function runNotesAuthorize(operations, bindingPs, hints) {
   const step1 = addLogStep(
     fmt(copy('notes.authorize_request.label_template'), { path: authzPath }),
     'pending',
-    desc('notes.authorize_request') +
-      formatRequest('POST', authzEndpoint, {
-        'Content-Type': 'application/json',
-        'Signature-Input': 'sig=("@method" "@authority" "@path" "content-type" "signature-key");created=...',
-        'Signature': 'sig=:...:',
-        'Signature-Key': `sig=jwt;jwt="${agentToken?.substring(0, 20)}..."`,
-      }, requestBody),
+    desc('notes.authorize_request'),
   )
   let resourceToken
   try {
-    const res = await sigFetch(authzEndpoint, {
+    const { response: res, sent } = await sigFetch(authzEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -1859,13 +1855,15 @@ async function runNotesAuthorize(operations, bindingPs, hints) {
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: agentToken },
       components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      returnSent: true,
     })
+    appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const body = await res.json().catch(() => null)
     if (res.ok && body?.resource_token) {
       resourceToken = body.resource_token
       resolveStep(step1, 'success', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
       appendStepBody(step1, formatResponse(res.status, null, body))
-      appendStepBody(step1, formatDecoded(decodeJWTPayloadBrowser(resourceToken), 'resource_token payload'))
+      appendStepBody(step1, formatDecoded(decodeJWTBrowser(resourceToken), 'resource_token'))
       await previewR3Document(decodeJWTPayloadBrowser(resourceToken))
     } else {
       resolveStep(step1, 'error', fmt(copy('notes.authorize_request.label_resolved_template'), { path: authzPath, status: res.status }))
@@ -1917,7 +1915,7 @@ async function finalizeNotesAuthToken(authToken) {
   localStorage.setItem(NOTES_AUTH_TOKEN_KEY, authToken)
   addLogStep(copy('notes.auth_token_received.label'), 'success',
     desc('notes.auth_token_received') +
-      formatDecoded(decodeJWTPayloadBrowser(authToken), 'auth_token payload') +
+      formatDecoded(decodeJWTBrowser(authToken), 'auth_token') +
       anotherRequestButton(),
     { kind: 'response' }
   )
@@ -2153,17 +2151,11 @@ async function callNotesAPI(method, path, body) {
   const step = addLogStep(
     fmt(copy(`${copyKey}.label_template`), { path }),
     'pending',
-    desc(copyKey) +
-      formatRequest(method, url, {
-        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-        'Signature-Input': 'sig=(...);created=...',
-        'Signature': 'sig=:...:',
-        'Signature-Key': `sig=jwt;jwt="${authToken.substring(0, 20)}..."`,
-      }, hasBody ? body : null),
+    desc(copyKey),
   )
 
   try {
-    const res = await sigFetch(url, {
+    const { response: res, sent } = await sigFetch(url, {
       method,
       headers: hasBody ? { 'Content-Type': 'application/json' } : {},
       body: hasBody ? JSON.stringify(body) : undefined,
@@ -2171,7 +2163,9 @@ async function callNotesAPI(method, path, body) {
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: authToken },
       components,
+      returnSent: true,
     })
+    appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const resBody = res.status === 204 ? null : await res.json().catch(() => null)
     if (res.ok) {
       resolveStep(step, 'success', fmt(copy(`${copyKey}.label_resolved_template`), { path, status: res.status }))
@@ -2262,22 +2256,18 @@ async function callDemoResourceApi(authToken) {
     return
   }
   const reqStep = addLogStep(fmt(copy('demo_api.request.label_template'), { path: new URL(endpoint).pathname }), 'pending',
-    desc('demo_api.request') +
-    formatRequest('GET', endpoint, {
-      'Signature-Input': 'sig=("@method" "@authority" "@path" "signature-key");created=...',
-      'Signature': 'sig=:...:',
-      'Signature-Key': `sig=jwt;jwt="${authToken?.substring(0, 20)}..."`,
-    }, null)
-  )
+    desc('demo_api.request'))
   try {
     const signingJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey)
-    const res = await sigFetch(endpoint, {
+    const { response: res, sent } = await sigFetch(endpoint, {
       method: 'GET',
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: authToken },
       components: ['@method', '@authority', '@path', 'signature-key'],
+      returnSent: true,
     })
+    appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
     const body = await res.json().catch(() => null)
     resolveStep(reqStep, res.ok ? 'success' : 'error', fmt(copy('demo_api.request.label_resolved_template'), { path: '/api/demo', status: res.status }))
     addLogStep(
