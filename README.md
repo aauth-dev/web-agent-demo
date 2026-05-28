@@ -1,7 +1,7 @@
-# playground.aauth.dev
+# AAuth Web Agent Demo
 
 A reference agent server for the AAuth protocol, running on Cloudflare Workers.
-Live at [aauth.dev](https://aauth.dev).
+Live at [web-agent.aauth.dev](https://web-agent.aauth.dev).
 
 ## What it does
 
@@ -28,7 +28,7 @@ See the `/setup` skill for a guided Cloudflare deployment walkthrough.
 ## Project layout
 
 - `src/` — Hono app, WebAuthn routes, agent token issuance
-- `public/` — static playground UI
+- `public/` — static web agent demo UI
 - `scripts/` — key generation helpers
 - `wrangler.toml` — Cloudflare Workers config
 

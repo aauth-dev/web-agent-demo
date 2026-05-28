@@ -1,8 +1,8 @@
 {
-  "name": "playground.aauth.dev",
+  "name": "web-agent-demo",
   "version": "0.1.0",
   "private": true,
-  "description": "AAuth Protocol Playground - a reference agent provider on Cloudflare Workers",
+  "description": "AAuth Web Agent Demo - a reference agent provider on Cloudflare Workers",
   "scripts": {
     "build:client": "esbuild client/protocol.js --bundle --format=iife --platform=browser --target=es2022 --outfile=public/protocol.js",
     "watch:client": "esbuild client/protocol.js --bundle --format=iife --platform=browser --target=es2022 --outfile=public/protocol.js --watch",

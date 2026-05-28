@@ -17,6 +17,19 @@ type HonoEnv = { Bindings: Env }
 
 const app = new Hono<HonoEnv>()
 
+// Legacy host redirect — playground.aauth.dev is the old hostname; all
+// production traffic should be served from web-agent.aauth.dev. We keep
+// the legacy route bound to this worker (see wrangler.toml) so existing
+// links 301 to the new host with path + query preserved.
+app.use('*', async (c, next) => {
+  const url = new URL(c.req.url)
+  if (url.hostname === 'playground.aauth.dev') {
+    url.hostname = 'web-agent.aauth.dev'
+    return c.redirect(url.toString(), 301)
+  }
+  await next()
+})
+
 app.use('*', cors())
 
 // Catch every unhandled exception, emit a structured error event with

@@ -9,14 +9,20 @@ compatibility_flags = ["nodejs_compat"]
 directory = "public"
 
 [vars]
-ORIGIN = "https://playground.aauth.dev"
-AGENT_NAME = "AAuth Playground"
+ORIGIN = "https://web-agent.aauth.dev"
+AGENT_NAME = "AAuth Web Agent Demo"
 
 [[kv_namespaces]]
 binding = "WEBAUTHN_KV"
 id = "8f3528fb8a884a7fa5d6e506ee783eca"
 
-# Custom domain — requires aauth.dev zone in this Cloudflare account
+# Custom domains — requires aauth.dev zone in this Cloudflare account.
+# playground.aauth.dev is kept as a route so the worker can 301 legacy
+# links to web-agent.aauth.dev (see redirect middleware in src/index.ts).
+[[routes]]
+pattern = "web-agent.aauth.dev"
+custom_domain = true
+
 [[routes]]
 pattern = "playground.aauth.dev"
 custom_domain = true

@@ -1,4 +1,4 @@
-# playground.aauth.dev — Claude project notes
+# AAuth Web Agent Demo — Claude project notes
 
 ## Deployment
 
@@ -13,7 +13,7 @@ To ship a change:
 2. `git push origin main`.
 3. Verify (usually live within a minute):
    ```bash
-   curl -s https://playground.aauth.dev/.well-known/aauth-agent.json | jq .
+   curl -s https://web-agent.aauth.dev/.well-known/aauth-agent.json | jq .
    ```
 
 Check deployment history with `npx wrangler deployments list`. If an

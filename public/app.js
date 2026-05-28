@@ -5,7 +5,7 @@ let ephemeralKeyPair = null // CryptoKeyPair — private key never exported
 
 // ── IndexedDB helpers for CryptoKey persistence ──
 
-const DB_NAME = 'aauth-playground'
+const DB_NAME = 'aauth-web-agent-demo'
 const DB_VERSION = 1
 const STORE_NAME = 'keys'
 
@@ -336,7 +336,7 @@ window.updateNotesRequestPreview = updateNotesRequestPreview
 
 // ── Settings persistence ──
 
-const SETTINGS_KEY = 'aauth-playground-settings'
+const SETTINGS_KEY = 'aauth-web-agent-demo-settings'
 const DEFAULT_PS = 'https://person.hello.coop'
 
 // Dev escape hatch: if the developer has set localStorage.plausible_ignore =
