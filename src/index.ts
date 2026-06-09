@@ -141,6 +141,8 @@ app.get('/.well-known/aauth-resource.json', (c) => {
     issuer: origin,
     jwks_uri: `${origin}/.well-known/jwks.json`,
     client_name: c.env.AGENT_NAME,
+    description:
+      'Sample protected API for the AAuth web agent playground, used to demonstrate the end-to-end authorization flow.',
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
     authorization_endpoint: `${origin}/authorize`,
     scope_descriptions: SCOPE_DESCRIPTIONS,
