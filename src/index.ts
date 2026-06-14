@@ -124,7 +124,7 @@ app.get('/.well-known/aauth-agent.json', (c) => {
   return c.json({
     issuer: origin,
     jwks_uri: `${origin}/.well-known/jwks.json`,
-    client_name: c.env.AGENT_NAME,
+    name: c.env.AGENT_NAME,
     name: c.env.AGENT_NAME,
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
     bootstrap_endpoint: `${origin}/bootstrap`,
@@ -140,7 +140,7 @@ app.get('/.well-known/aauth-resource.json', (c) => {
   return c.json({
     issuer: origin,
     jwks_uri: `${origin}/.well-known/jwks.json`,
-    client_name: c.env.AGENT_NAME,
+    name: c.env.AGENT_NAME,
     description:
       'Sample protected API for the AAuth web agent playground, used to demonstrate the end-to-end authorization flow.',
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
