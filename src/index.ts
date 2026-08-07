@@ -124,7 +124,7 @@ app.get('/.well-known/aauth-agent.json', (c) => {
   return c.json({
     issuer: origin,
     jwks_uri: `${origin}/.well-known/jwks.json`,
-    name: c.env.AGENT_NAME,
+    client_name: c.env.AGENT_NAME,
     name: c.env.AGENT_NAME,
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
     bootstrap_endpoint: `${origin}/bootstrap`,
