@@ -14,6 +14,9 @@ beforeAll(() => {
 async function makeSigningKeyJson(): Promise<string> {
   const kp = (await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])) as CryptoKeyPair
   const jwk = await webcrypto.subtle.exportKey('jwk', kp.privateKey)
+  // Mirror scripts/generate-key.mjs: httpsig 2.0 requires a fully-specified
+  // alg on every JWK (RFC 9864); WebCrypto's exportKey does not set one.
+  jwk.alg = 'Ed25519'
   return JSON.stringify(jwk)
 }
 
@@ -56,7 +59,10 @@ async function loadApp() {
 async function makeEphemeralKeyPair(): Promise<{ publicJwk: JsonWebKey; privateJwk: JsonWebKey }> {
   const kp = (await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])) as CryptoKeyPair
   const publicJwk = await webcrypto.subtle.exportKey('jwk', kp.publicKey)
+  // httpsig 2.0 requires a fully-specified alg on every JWK (RFC 9864).
+  publicJwk.alg = 'Ed25519'
   const privateJwk = await webcrypto.subtle.exportKey('jwk', kp.privateKey)
+  privateJwk.alg = 'Ed25519'
   return { publicJwk, privateJwk }
 }
 

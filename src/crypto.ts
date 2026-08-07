@@ -36,22 +36,28 @@ export async function getPublicJWK(jwkJson: string): Promise<JsonWebKey & { kid:
   // Strip private key material AND any private-half operational hints
   // (key_ops: ["sign"], ext) that WebCrypto carries over when exporting
   // the private JWK. Published JWKS keys are for verification only.
+  // Per draft-hardt-httpbis-signature-key-08 (RFC 9864) every published
+  // JWK must carry a fully-specified alg; the SIGNING_KEY secret is a
+  // WebCrypto-exported Ed25519 JWK without one, so stamp it here.
   const { d: _d, key_ops: _ops, ext: _ext, ...rest } = jwk
-  const publicJwk = { ...rest, key_ops: ['verify'] }
+  const publicJwk = { ...rest, key_ops: ['verify'], alg: 'Ed25519' }
   // Compute kid as thumbprint of the required public members only
   const kid = await computeJwkThumbprint(publicJwk)
   return { ...publicJwk, kid }
 }
 
-// Keep only the RFC 7638 required public-key members for the given key type.
-// Drops d (private), key_ops, ext, alg, and any other WebCrypto-inserted
-// hints. Use for cnf.jwk in agent_token / resource_token so the confirmation
-// key is reduced to the canonical form verifiers can directly thumbprint.
+// Keep only the RFC 7638 required public-key members plus `alg`. Drops d
+// (private), key_ops, ext, and any other WebCrypto-inserted hints. Use for
+// cnf.jwk in agent_token / resource_token so the confirmation key is in the
+// canonical form verifiers can directly thumbprint. `alg` is preserved:
+// httpsig 2.0 (signature-key -08) takes the algorithm from the JWK's alg
+// member and rejects a key without one, and RFC 7638 thumbprints ignore it.
 export function sanitizeCnfJwk(jwk: JsonWebKey): JsonWebKey {
-  if (jwk.kty === 'OKP') return { kty: 'OKP', crv: jwk.crv, x: jwk.x }
-  if (jwk.kty === 'EC') return { kty: 'EC', crv: jwk.crv, x: jwk.x, y: jwk.y }
-  if (jwk.kty === 'RSA') return { kty: 'RSA', n: jwk.n, e: jwk.e }
-  const { d: _d, key_ops: _ops, ext: _ext, alg: _alg, ...rest } = jwk as unknown as Record<string, unknown>
+  const alg = jwk.alg ? { alg: jwk.alg } : {}
+  if (jwk.kty === 'OKP') return { kty: 'OKP', crv: jwk.crv, x: jwk.x, ...alg }
+  if (jwk.kty === 'EC') return { kty: 'EC', crv: jwk.crv, x: jwk.x, y: jwk.y, ...alg }
+  if (jwk.kty === 'RSA') return { kty: 'RSA', n: jwk.n, e: jwk.e, ...alg }
+  const { d: _d, key_ops: _ops, ext: _ext, ...rest } = jwk as unknown as Record<string, unknown>
   return rest as unknown as JsonWebKey
 }
 

@@ -8,6 +8,9 @@ import { webcrypto } from 'node:crypto'
 
 const keyPair = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
 const privateJwk = await webcrypto.subtle.exportKey('jwk', keyPair.privateKey)
+// httpsig 2.0 (signature-key -08, RFC 9864) requires every JWK to carry a
+// fully-specified alg; WebCrypto's exportKey does not set one.
+privateJwk.alg = 'Ed25519'
 
 console.log('Private JWK (set as SIGNING_KEY secret):')
 console.log(JSON.stringify(privateJwk))

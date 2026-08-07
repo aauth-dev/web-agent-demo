@@ -14,6 +14,9 @@ beforeAll(() => {
 async function makeSigningKeyJson(): Promise<string> {
   const kp = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']) as CryptoKeyPair
   const jwk = await webcrypto.subtle.exportKey('jwk', kp.privateKey)
+  // Mirror scripts/generate-key.mjs: httpsig 2.0 requires a fully-specified
+  // alg on every JWK (RFC 9864); WebCrypto's exportKey does not set one.
+  jwk.alg = 'Ed25519'
   return JSON.stringify(jwk)
 }
 
@@ -123,7 +126,9 @@ async function mintAgentTokenForTest(env: any, opts?: { sub?: string; exp?: numb
   const { computeJwkThumbprint } = await import('../src/crypto')
   const kp = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']) as CryptoKeyPair
   const publicJwk = await webcrypto.subtle.exportKey('jwk', kp.publicKey)
+  publicJwk.alg = 'Ed25519'
   const privateJwk = await webcrypto.subtle.exportKey('jwk', kp.privateKey)
+  privateJwk.alg = 'Ed25519'
 
   const serverJwk = JSON.parse(env.SIGNING_KEY)
   const serverKey = await webcrypto.subtle.importKey('jwk', serverJwk, { name: 'Ed25519' }, false, ['sign'])
@@ -137,7 +142,9 @@ async function mintAgentTokenForTest(env: any, opts?: { sub?: string; exp?: numb
     dwk: 'aauth-agent.json',
     sub: opts?.sub ?? 'aauth:test@playground.test',
     jti: `jti-${Math.random().toString(36).slice(2)}`,
-    cnf: { jwk: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x } },
+    // cnf.jwk must carry alg — httpsig 2.0 takes the verification
+    // algorithm from the JWK and rejects a key without one.
+    cnf: { jwk: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, alg: 'Ed25519' } },
     iat: now,
     exp: opts?.exp ?? now + 3600,
   }
