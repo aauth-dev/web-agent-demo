@@ -107,14 +107,25 @@ export function decodeJWTHeader(jwt: string): Record<string, unknown> {
   return JSON.parse(json)
 }
 
-// Verify an Ed25519-signed JWT against a JWKS. Finds the verification key by
-// `kid` (falling back to first key if no kid), rejects non-EdDSA algs, and
+// Verify a signed JWT against a JWKS. Finds the verification key by `kid`
+// (falling back to first key if no kid), rejects unsupported algs, and
 // checks the signature. Callers are responsible for payload claim checks
 // (iss/aud/exp/nbf/jti).
 // Maps JWT alg → WebCrypto import/verify parameters. Extend here for new
-// algorithms. Hellō's issuer JWKS uses RS256; our own JWKS uses EdDSA.
+// algorithms. Hellō's issuer JWKS uses RS256; our own JWKS uses Ed25519.
+//
+// `EdDSA` is deliberately absent, on both sides. We emit the
+// fully-specified `Ed25519`, and we refuse the polymorphic identifier on
+// input: "Implementations MUST NOT accept none, the polymorphic EdDSA
+// identifier, or any symmetric algorithm"
+// (draft-hardt-oauth-aauth-protocol §Signature Algorithms). There is no
+// transition allowance in the spec, so there is none here.
+//
+// Flag day: Wallet's svr/issuer/sign.js:32 still heads every aa-auth+jwt
+// and aa-person+jwt with `EdDSA`, so /api/demo rejects live PS auth tokens
+// until that ships `Ed25519` for AAuth token types.
 const JWT_ALG_PARAMS: Record<string, { importAlgo: any; verifyAlgo: any }> = {
-  EdDSA: { importAlgo: { name: 'Ed25519' }, verifyAlgo: 'Ed25519' },
+  Ed25519: { importAlgo: { name: 'Ed25519' }, verifyAlgo: 'Ed25519' },
   RS256: {
     importAlgo: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
     verifyAlgo: 'RSASSA-PKCS1-v1_5',
@@ -154,6 +165,12 @@ export async function verifyJWT(
       // fully-specified alg "Ed25519" (RFC 9864), which workerd's importKey
       // rejects for OKP keys (it only accepts "EdDSA" or no alg). The
       // algorithm is passed explicitly via importAlgo, so alg is redundant.
+      //
+      // DO NOT REMOVE while fixing an emit-side alg. Emitting "Ed25519"
+      // (headers, JWKS, cnf.jwk) and stripping it before importKey are
+      // opposite ends of the same pipe. Tests run under environment:
+      // 'node', where this import succeeds either way — breaking it passes
+      // CI and fails on deploy to workerd.
       const { alg: _alg, ...importJwk } = jwk as JsonWebKey & { alg?: string }
       const key = await crypto.subtle.importKey(
         'jwk',

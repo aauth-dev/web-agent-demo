@@ -1,18 +1,44 @@
 import { verify as httpSigVerify } from '@hellocoop/httpsig'
 import type { Context } from 'hono'
-import { verifyJWT } from './crypto'
+import { computeJwkThumbprint, decodeJWTHeader, decodeJWTPayload, verifyJWT } from './crypto'
 
 // Shared RFC 9421 verification for endpoints that accept sig=jwt. Reads
-// the body once, runs httpSigVerify, enforces the jwt scheme, and
-// optionally runs a caller-supplied JWT verification on the inner token
-// (e.g. against our own JWKS or a PS JWKS).
+// the body once, runs httpSigVerify, enforces the jwt scheme, enforces the
+// set of AAuth token types the endpoint accepts, and optionally runs a
+// caller-supplied JWT verification on the inner token (e.g. against our
+// own JWKS or a PS JWKS).
 //
 // Returns the parsed body as text (callers parse JSON themselves, since
 // c.req.json() would re-consume the stream) and the inner JWT payload.
 //
 // On failure, returns a Hono Response — callers can return it directly.
 
+// The three AAuth token types that can arrive in a Signature-Key header.
+export const TOKEN_TYP = {
+  agent: 'aa-agent+jwt',
+  person: 'aa-person+jwt',
+  auth: 'aa-auth+jwt',
+} as const
+
+export type TokenKind = keyof typeof TOKEN_TYP
+
 export interface SigJwtVerifyOptions {
+  // Which token types this endpoint accepts. REQUIRED, with no default,
+  // so every call site has to state it.
+  //
+  // "A recipient MUST reject an aa-person+jwt wherever an auth token is
+  // required. Only typ distinguishes the two" (§Person Token
+  // Verification). A person token and a PS-issued auth token share iss,
+  // dwk, aud, sub and cnf — every check except this one passes for both,
+  // so a verifier that omits it accepts a credential carrying no
+  // authorization as though it carried authorization. Making the accepted
+  // set an explicit argument is what keeps that from being forgotten.
+  accept: TokenKind[]
+  // Response to return when the presented token's typ is not accepted.
+  // Defaults to a flat 401; endpoints that can tell the agent how to
+  // recover (e.g. /authorize challenging with requirement=person-token)
+  // supply their own.
+  onTypMismatch?: (c: Context, typ: string | undefined) => Response
   // Optional inner-token verifier: takes the raw JWT string and returns
   // { payload } if it's valid. Use this to verify against our own JWKS
   // (agent_token from us) or a PS JWKS (auth_token from the PS).
@@ -33,7 +59,7 @@ export interface SigJwtVerifyResult {
 
 export async function verifySigJwt(
   c: Context,
-  options: SigJwtVerifyOptions = {}
+  options: SigJwtVerifyOptions
 ): Promise<SigJwtVerifyResult | Response> {
   // Read body as text — httpSigVerify needs it to reconstruct the
   // signature base, and c.req.json() would consume the stream first.
@@ -56,6 +82,27 @@ export async function verifySigJwt(
   }
 
   const innerJwt = sigResult.jwt.raw
+
+  // Enforce typ before anything else looks at the token. This runs on the
+  // unverified header, which is fine — it only ever narrows what we go on
+  // to verify, and a token whose typ we do not accept is rejected whether
+  // or not its signature would have checked out.
+  let presentedTyp: string | undefined
+  try {
+    presentedTyp = decodeJWTHeader(innerJwt).typ as string | undefined
+  } catch {
+    return c.json({ error: 'Signature-Key jwt has an undecodable header' }, 401)
+  }
+  const acceptedTyps = options.accept.map((kind) => TOKEN_TYP[kind])
+  if (!presentedTyp || !acceptedTyps.includes(presentedTyp as typeof acceptedTyps[number])) {
+    if (options.onTypMismatch) return options.onTypMismatch(c, presentedTyp)
+    return c.json({
+      error: 'invalid_token_type',
+      typ: presentedTyp ?? null,
+      accepted: acceptedTyps,
+    }, 401)
+  }
+
   let innerPayload: Record<string, unknown> | null = null
 
   if (options.verifyInner) {
@@ -77,12 +124,6 @@ export async function verifySigJwt(
   }
 
   return { rawBody, innerJwt, innerPayload, callerJkt: sigResult.thumbprint }
-}
-
-// Convenience: build a verifyInner that uses our own JWKS. For tokens we
-// issued (agent_token minted at bootstrap/refresh).
-export function ourJwksVerifier(ourJwk: JsonWebKey) {
-  return (jwt: string) => verifyJWT(jwt, { keys: [ourJwk] })
 }
 
 // Result of verifying a sig=hwk request — the public key that signed it,
@@ -118,23 +159,106 @@ export async function verifySigHwk(c: Context): Promise<SigHwkVerifyResult | Res
   return { rawBody, publicJwk: sigResult.publicKey, jkt: sigResult.thumbprint }
 }
 
+// ── Issuer key discovery ──
+//
+// Per draft-hardt-httpbis-signature-key, a token names its own metadata
+// document with `dwk`; the issuer's keys are found by fetching
+// `{iss}/.well-known/{dwk}` and following `jwks_uri`. Both the person
+// token (dwk `aauth-person.json`) and the auth token (also issued by the
+// PS, same document) resolve through here.
+export interface IssuerKeys {
+  metadata: Record<string, unknown>
+  metadataUrl: string
+  jwks: { keys: JsonWebKey[] }
+}
+
+export async function resolveIssuerKeys(iss: string, dwk: string): Promise<IssuerKeys> {
+  const metadataUrl = `${iss}/.well-known/${dwk}`
+  const metaRes = await fetch(metadataUrl)
+  if (!metaRes.ok) throw new Error(`fetch ${dwk} failed: ${metaRes.status}`)
+  const metadata = (await metaRes.json()) as Record<string, unknown>
+  const jwksUri = metadata.jwks_uri as string | undefined
+  if (!jwksUri) throw new Error(`${dwk} missing jwks_uri`)
+  const jwksRes = await fetch(jwksUri)
+  if (!jwksRes.ok) throw new Error(`fetch JWKS failed: ${jwksRes.status}`)
+  const jwks = (await jwksRes.json()) as { keys: JsonWebKey[] }
+  return { metadata, metadataUrl, jwks }
+}
+
 // Build a verifyInner that fetches the PS JWKS (via the JWT's iss+dwk)
 // and verifies against it. Used for auth_tokens at /api/demo.
 export function psJwksVerifier() {
   return async (jwt: string) => {
-    const { decodeJWTPayload } = await import('./crypto')
     const unverified = decodeJWTPayload(jwt)
     const iss = unverified.iss as string | undefined
-    const dwk = (unverified.dwk as string | undefined) ?? 'aauth-person.json'
+    const dwk = (unverified.dwk as string | undefined) ?? PERSON_DWK
     if (!iss) throw new Error('token missing iss')
-    const metaRes = await fetch(`${iss}/.well-known/${dwk}`)
-    if (!metaRes.ok) throw new Error(`fetch PS metadata failed: ${metaRes.status}`)
-    const meta = (await metaRes.json()) as Record<string, unknown>
-    const jwksUri = meta.jwks_uri as string | undefined
-    if (!jwksUri) throw new Error('PS metadata missing jwks_uri')
-    const jwksRes = await fetch(jwksUri)
-    if (!jwksRes.ok) throw new Error(`fetch PS JWKS failed: ${jwksRes.status}`)
-    const jwks = (await jwksRes.json()) as { keys: JsonWebKey[] }
+    const { jwks } = await resolveIssuerKeys(iss, dwk)
     return verifyJWT(jwt, jwks)
   }
+}
+
+// ── Person token verification ──
+//
+// draft-hardt-oauth-aauth-protocol §Person Token Verification. The agent
+// presents the person token in place of its agent token via
+// `Signature-Key: sig=jwt`, so the HTTP signature has already proven
+// possession of `cnf.jwk` — step 6 is the check that the key which signed
+// the request is the key the PS bound the token to.
+export const PERSON_TYP = TOKEN_TYP.person
+export const PERSON_DWK = 'aauth-person.json'
+
+export interface PersonTokenResult {
+  payload: Record<string, unknown>
+  // The PS metadata document fetched for key discovery — reused by the
+  // caller so a resource token's `aud` (the PS `issuer`) costs no second
+  // round trip.
+  psMetadata: Record<string, unknown>
+  psMetadataUrl: string
+}
+
+// Throws Error on any verification failure; the message is the reason.
+export async function verifyPersonToken(
+  jwt: string,
+  opts: { aud: string; callerJkt: string }
+): Promise<PersonTokenResult> {
+  // 1. typ
+  const header = decodeJWTHeader(jwt)
+  if (header.typ !== PERSON_TYP) throw new Error(`typ must be ${PERSON_TYP}`)
+
+  // 2. dwk + issuer key discovery + signature
+  const unverified = decodeJWTPayload(jwt)
+  if (unverified.dwk !== PERSON_DWK) throw new Error(`dwk must be ${PERSON_DWK}`)
+  const iss = unverified.iss
+  if (typeof iss !== 'string') throw new Error('missing iss')
+  // 4. iss must be an HTTPS server identifier
+  let issUrl: URL
+  try {
+    issUrl = new URL(iss)
+  } catch {
+    throw new Error('iss is not a valid URL')
+  }
+  if (issUrl.protocol !== 'https:') throw new Error('iss must be HTTPS')
+
+  const { metadata, metadataUrl, jwks } = await resolveIssuerKeys(iss, PERSON_DWK)
+  const { payload } = await verifyJWT(jwt, jwks)
+
+  // 3. exp / iat
+  const now = Math.floor(Date.now() / 1000)
+  if (typeof payload.exp !== 'number' || payload.exp < now) throw new Error('expired')
+  if (typeof payload.iat === 'number' && payload.iat > now + 60) throw new Error('iat in the future')
+
+  // 5. aud is this resource
+  if (payload.aud !== opts.aud) throw new Error(`aud is not ${opts.aud}`)
+
+  if (typeof payload.sub !== 'string' || !payload.sub) throw new Error('missing sub')
+  if (typeof payload.jti !== 'string' || !payload.jti) throw new Error('missing jti')
+
+  // 6. cnf.jwk is the key that signed the HTTP request
+  const cnfJwk = (payload.cnf as { jwk?: JsonWebKey } | undefined)?.jwk
+  if (!cnfJwk) throw new Error('missing cnf.jwk')
+  const cnfJkt = await computeJwkThumbprint(cnfJwk)
+  if (cnfJkt !== opts.callerJkt) throw new Error('cnf.jwk is not the request signing key')
+
+  return { payload, psMetadata: metadata, psMetadataUrl: metadataUrl }
 }

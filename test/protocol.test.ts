@@ -18,6 +18,51 @@ function extractFn(name: string): Function {
   return new Function(`${match[0]}\nreturn ${name};`)()
 }
 
+// The deferred-response poll loop resolves its narration by template —
+// copy(`${copyPrefix}.ps_pending_longpoll.label_template`) and friends —
+// so a missing key renders as `undefined` in the log rather than throwing.
+// Pin every prefix the loop can be driven with.
+describe('deferred-poll narration keys', () => {
+  const LOG_TEXT = JSON.parse(
+    readFileSync(resolve(__dirname, '../public/log-text.json'), 'utf-8')
+  )
+  const at = (path: string) =>
+    path.split('.').reduce<any>((o, k) => (o == null ? undefined : o[k]), LOG_TEXT)
+
+  // 'person_token' drives the person-token leg, 'authorize' the whoami
+  // auth-token leg, 'notes' the notes auth-token leg.
+  for (const prefix of ['person_token', 'authorize', 'notes']) {
+    it(`resolves every key the poll loop reads for prefix "${prefix}"`, () => {
+      for (const key of [
+        'ps_pending_longpoll.label_template',
+        'ps_pending_longpoll.label_resolved_template',
+        'ps_pending_longpoll.description',
+        'ps_consent_prompt.label',
+        'authorization_denied.label',
+        'authorization_timed_out.label',
+      ]) {
+        expect(at(`${prefix}.${key}`), `${prefix}.${key}`).toBeTypeOf('string')
+      }
+    })
+  }
+
+  it('has the person-token request, received, and resumed-consent copy', () => {
+    for (const key of [
+      'person_token.request.label_template',
+      'person_token.request.label_resolved_template',
+      'person_token.request.label_error_network_template',
+      'person_token.request.description',
+      'person_token.received.label',
+      'person_token.received.description',
+      'person_token.authorization_granted.label',
+      'person_token_resumed.ps_consent_prompt.label',
+      'person_token_resumed.ps_consent_prompt.description',
+    ]) {
+      expect(at(key), key).toBeTypeOf('string')
+    }
+  })
+})
+
 describe('parseInteractionHeader', () => {
   const parse = extractFn('parseInteractionHeader') as (h: string) => Record<string, string>
 
