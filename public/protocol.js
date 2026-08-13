@@ -248,15 +248,17 @@
       function validateJwk(jwk) {
         determineAlgorithm(jwk);
       }
+      function withoutAlg(jwk) {
+        const { alg: _alg, ...rest } = jwk;
+        return rest;
+      }
       async function importPrivateKey(jwk) {
         const algorithm = determineAlgorithm(jwk);
-        return await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["sign"]);
+        return await crypto.subtle.importKey("jwk", withoutAlg(jwk), algorithm, false, ["sign"]);
       }
       async function importPublicKey(jwk) {
         const algorithm = determineAlgorithm(jwk);
-        return await crypto.subtle.importKey("jwk", jwk, algorithm, false, [
-          "verify"
-        ]);
+        return await crypto.subtle.importKey("jwk", withoutAlg(jwk), algorithm, false, ["verify"]);
       }
       function getPublicJwk(privateJwk) {
         const { d, p, q, dp, dq, qi, ...publicJwk } = privateJwk;
@@ -3416,13 +3418,23 @@
     jwk.alg = "Ed25519";
     return jwk;
   }
+  var SIGNED_COMPONENTS = ["@method", "@authority", "@path", "signature-key"];
+  var SIGNED_COMPONENTS_WITH_BODY = [
+    "@method",
+    "@authority",
+    "@path",
+    "content-type",
+    "content-digest",
+    "signature-key"
+  ];
+  var signedComponents = (hasBody) => hasBody ? SIGNED_COMPONENTS_WITH_BODY : SIGNED_COMPONENTS;
   window.aauthSigFetch = async function aauthSigFetch(url, { method = "GET", headers = {}, body, jwt } = {}) {
     const keyPair = window.aauthEphemeral.get();
     if (!keyPair) throw new Error("no signing key available");
     if (!jwt) throw new Error("jwt required for sig=jwt scheme");
     const signingKey = await exportSigningJwk(keyPair);
     const hasBody = body !== void 0 && body !== null;
-    const components = hasBody ? ["@method", "@authority", "@path", "content-type", "signature-key"] : ["@method", "@authority", "@path", "signature-key"];
+    const components = signedComponents(hasBody);
     const mergedHeaders = hasBody ? { "Content-Type": "application/json", ...headers } : { ...headers };
     return (0, import_httpsig.fetch)(url, {
       method,
@@ -3439,7 +3451,7 @@
     if (!keyPair) throw new Error("no signing key available");
     const signingKey = await exportSigningJwk(keyPair);
     const hasBody = body !== void 0 && body !== null;
-    const components = hasBody ? ["@method", "@authority", "@path", "content-type", "signature-key"] : ["@method", "@authority", "@path", "signature-key"];
+    const components = signedComponents(hasBody);
     const mergedHeaders = hasBody ? { "Content-Type": "application/json", ...headers } : { ...headers };
     return (0, import_httpsig.fetch)(url, {
       method,
@@ -3737,7 +3749,7 @@ ${renderJSON(body)}`;
         signingKey: publicJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "hwk" },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        components: SIGNED_COMPONENTS_WITH_BODY,
         returnSent: true
       });
       res = response;
@@ -3759,7 +3771,7 @@ ${renderJSON(body)}`;
     window.aauthApplyBootstrapResult(result);
     return { result };
   }
-  async function runRefresh() {
+  async function runRefresh(psOverride) {
     const keyPair = window.aauthEphemeral.get();
     if (!keyPair) {
       addLogStep(
@@ -3771,9 +3783,9 @@ ${renderJSON(body)}`;
     }
     addLogSection(copy("sections.refresh"));
     const publicJwk = await exportSigningJwk(keyPair);
-    let psUrl;
+    let psUrl = psOverride;
     const savedToken = localStorage.getItem("aauth-agent-token");
-    if (savedToken) {
+    if (!psUrl && savedToken) {
       try {
         psUrl = decodeJWTPayloadBrowser(savedToken)?.ps;
       } catch {
@@ -3797,7 +3809,7 @@ ${renderJSON(body)}`;
         signingKey: publicJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "hwk" },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        components: SIGNED_COMPONENTS_WITH_BODY,
         returnSent: true
       });
       res = response;
@@ -3819,6 +3831,21 @@ ${renderJSON(body)}`;
     window.aauthApplyBootstrapResult(result);
     return result;
   }
+  async function rebindPs(psUrl) {
+    if (!window.aauthEphemeral.get()) return null;
+    clearAllPersistedLogs();
+    localStorage.removeItem(NOTES_AUTH_TOKEN_KEY);
+    localStorage.removeItem(PENDING_AUTHZ_KEY);
+    localStorage.removeItem("aauth-pending-whoami");
+    document.getElementById("bootstrap-artifacts")?.classList.remove("hidden");
+    setActiveLog("bootstrap-log");
+    clearLog();
+    showLog();
+    const result = await runRefresh(psUrl);
+    if (result) location.reload();
+    return result;
+  }
+  window.aauthRebindPs = rebindPs;
   async function startBootstrap() {
     const psUrl = (window.getCurrentPS?.() || "").trim();
     if (!psUrl) {
@@ -3903,7 +3930,7 @@ ${renderJSON(body)}`;
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "signature-key"],
+        components: SIGNED_COMPONENTS,
         returnSent: true
       });
       appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
@@ -3984,7 +4011,7 @@ ${renderJSON(body)}`;
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: authToken },
-        components: ["@method", "@authority", "@path", "signature-key"],
+        components: SIGNED_COMPONENTS,
         returnSent: true
       });
       appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
@@ -4221,7 +4248,7 @@ ${renderJSON(body)}`;
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "signature-key"],
+        components: SIGNED_COMPONENTS_WITH_BODY,
         returnSent: true
       });
       appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
@@ -4335,7 +4362,7 @@ ${renderJSON(body)}`;
           signingKey: signingJwk,
           signingCryptoKey: keyPair.privateKey,
           signatureKey: { type: "jwt", jwt: agentToken },
-          components: ["@method", "@authority", "@path", "signature-key"],
+          components: SIGNED_COMPONENTS,
           returnSent: true
         });
         if (cycle === 1) {
@@ -4656,7 +4683,7 @@ ${renderJSON(body)}`;
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: agentToken },
-        components: ["@method", "@authority", "@path", "content-type", "signature-key"],
+        components: SIGNED_COMPONENTS_WITH_BODY,
         returnSent: true
       });
       appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
@@ -4893,7 +4920,7 @@ ${renderJSON(body)}`;
     const origin = window.NOTES_ORIGIN || "https://notes.aauth.dev";
     const url = `${origin}${path}`;
     const hasBody = body !== void 0 && body !== null;
-    const components = hasBody ? ["@method", "@authority", "@path", "content-type", "signature-key"] : ["@method", "@authority", "@path", "signature-key"];
+    const components = signedComponents(hasBody);
     const copyKey = method === "GET" && path === "/notes" ? "notes_app.list_request" : method === "POST" ? "notes_app.create_request" : method === "PUT" ? "notes_app.update_request" : method === "DELETE" ? "notes_app.delete_request" : "notes_app.get_request";
     setActiveLog("notes-api-log");
     const apiLog = currentLog();
@@ -4985,7 +5012,7 @@ ${renderJSON(body)}`;
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: "jwt", jwt: authToken },
-        components: ["@method", "@authority", "@path", "signature-key"],
+        components: SIGNED_COMPONENTS,
         returnSent: true
       });
       appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)));
