@@ -9,6 +9,7 @@ import {
   signJWT,
   generateJTI,
   decodeJWTPayload,
+  verifyJWT,
 } from '../src/crypto'
 
 // Make Web Crypto available as a global for the module under test.
@@ -221,6 +222,44 @@ describe('signJWT + decodeJWTPayload', () => {
     // header={"alg":"none"}; payload={"a":1}; sig=""
     const jwt = 'eyJhbGciOiJub25lIn0.eyJhIjoxfQ.'
     expect(decodeJWTPayload(jwt)).toEqual({ a: 1 })
+  })
+})
+
+describe('verifyJWT alg handling', () => {
+  // §Signature Algorithms: a fully-specified identifier is REQUIRED, and
+  // implementations MUST NOT accept the polymorphic `EdDSA`. Both halves
+  // are pinned here — emit Ed25519, and refuse EdDSA on input.
+  it('accepts a token headed Ed25519', async () => {
+    const privateKey = await importSigningKey(signingKeyJson)
+    const publicJwk = await getPublicJWK(signingKeyJson)
+    const jwt = await signJWT(
+      { alg: 'Ed25519', typ: 'aa-person+jwt', kid: publicJwk.kid },
+      { iss: 'https://ps.test', sub: 'abc' },
+      privateKey,
+    )
+    const { payload } = await verifyJWT(jwt, { keys: [publicJwk] })
+    expect(payload.sub).toBe('abc')
+  })
+
+  it('rejects a token headed with the polymorphic EdDSA', async () => {
+    // Flag day with Wallet: svr/issuer/sign.js heads every aa-auth+jwt and
+    // aa-person+jwt with EdDSA today, so /api/demo rejects live PS tokens
+    // until that ships Ed25519. Spec-correct, deliberately not lenient.
+    const privateKey = await importSigningKey(signingKeyJson)
+    const publicJwk = await getPublicJWK(signingKeyJson)
+    const jwt = await signJWT(
+      { alg: 'EdDSA', typ: 'aa-auth+jwt', kid: publicJwk.kid },
+      { iss: 'https://ps.test', sub: 'abc' },
+      privateKey,
+    )
+    await expect(verifyJWT(jwt, { keys: [publicJwk] })).rejects.toThrow(/unsupported alg/)
+  })
+
+  it('rejects an unsupported alg', async () => {
+    const publicJwk = await getPublicJWK(signingKeyJson)
+    // header={"alg":"none"}; payload={"a":1}; sig=""
+    await expect(verifyJWT('eyJhbGciOiJub25lIn0.eyJhIjoxfQ.', { keys: [publicJwk] }))
+      .rejects.toThrow(/unsupported alg/)
   })
 })
 
