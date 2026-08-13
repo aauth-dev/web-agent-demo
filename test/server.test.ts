@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
 import { fetch as sigFetch } from '@hellocoop/httpsig'
-import { decodeJWTPayload } from '../src/crypto'
+import { decodeJWTHeader, decodeJWTPayload } from '../src/crypto'
 
 beforeAll(() => {
   if (!(globalThis as any).crypto) {
@@ -136,7 +136,7 @@ async function mintAgentTokenForTest(env: any, opts?: { sub?: string; exp?: numb
   const serverKid = await computeJwkThumbprint(serverPub)
 
   const now = Math.floor(Date.now() / 1000)
-  const header = { alg: 'EdDSA', typ: 'aa-agent+jwt', kid: serverKid }
+  const header = { alg: 'Ed25519', typ: 'aa-agent+jwt', kid: serverKid }
   const payload = {
     iss: env.ORIGIN,
     dwk: 'aauth-agent.json',
@@ -308,6 +308,10 @@ describe('POST /authorize', () => {
     expect(resBody.ps_metadata).toEqual(psMetadata)
     expect(resBody.ps_metadata_url).toBe('https://ps.test/.well-known/aauth-person.json')
     expect(resBody.resource_token).toBeDefined()
+
+    const header = decodeJWTHeader(resBody.resource_token)
+    expect(header.alg).toBe('Ed25519')
+    expect(header.typ).toBe('aa-resource+jwt')
 
     const payload = decodeJWTPayload(resBody.resource_token)
     expect(payload.iss).toBe('https://playground.test')

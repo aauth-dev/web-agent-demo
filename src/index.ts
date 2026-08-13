@@ -314,7 +314,7 @@ async function mintAgentToken(
   const publicJwk = await getPublicJWK(env.SIGNING_KEY)
   const now = Math.floor(Date.now() / 1000)
 
-  const agentHeader = { alg: 'EdDSA', typ: 'aa-agent+jwt', kid: publicJwk.kid }
+  const agentHeader = { alg: 'Ed25519', typ: 'aa-agent+jwt', kid: publicJwk.kid }
   const agentPayload: Record<string, unknown> = {
     iss: origin,
     dwk: 'aauth-agent.json',
@@ -425,7 +425,7 @@ app.post('/authorize', async (c) => {
 
   const now = Math.floor(Date.now() / 1000)
   const rtHeader = {
-    alg: 'EdDSA',
+    alg: 'Ed25519',
     typ: 'aa-resource+jwt',
     kid: ourJwk.kid,
   }

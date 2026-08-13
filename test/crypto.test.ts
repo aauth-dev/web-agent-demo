@@ -93,7 +93,7 @@ describe('computeJwkThumbprint', () => {
       crv: 'Ed25519',
       x: 'Hf8svifsJ7N3rWuXZF4qFv8aS6JxKtHKQg5cFv7SOZw',
     } as JsonWebKey
-    const withExtras = { ...base, kid: 'some-kid', use: 'sig', alg: 'EdDSA' } as JsonWebKey
+    const withExtras = { ...base, kid: 'some-kid', use: 'sig', alg: 'Ed25519' } as JsonWebKey
     expect(await computeJwkThumbprint(base)).toBe(await computeJwkThumbprint(withExtras))
   })
 
@@ -172,7 +172,7 @@ describe('signJWT + decodeJWTPayload', () => {
     const privateKey = await importSigningKey(signingKeyJson)
     const publicJwk = await getPublicJWK(signingKeyJson)
 
-    const header = { alg: 'EdDSA', typ: 'aa-agent+jwt', kid: publicJwk.kid }
+    const header = { alg: 'Ed25519', typ: 'aa-agent+jwt', kid: publicJwk.kid }
     const payload = {
       iss: 'https://example.test',
       sub: 'aauth:test@example.test',
@@ -212,7 +212,7 @@ describe('signJWT + decodeJWTPayload', () => {
       iat: 1700000000,
       exp: 1700003600,
     }
-    const jwt = await signJWT({ alg: 'EdDSA', typ: 'aa-agent+jwt', kid: 'k' }, payload, privateKey)
+    const jwt = await signJWT({ alg: 'Ed25519', typ: 'aa-agent+jwt', kid: 'k' }, payload, privateKey)
     const decoded = decodeJWTPayload(jwt)
     expect(decoded).toEqual(payload)
   })
@@ -235,7 +235,7 @@ describe('agent_jkt computation (resource-token claim)', () => {
     // Mint an agent token that embeds the ephemeral pubkey in cnf.jwk.
     const privateKey = await importSigningKey(signingKeyJson)
     const agentToken = await signJWT(
-      { alg: 'EdDSA', typ: 'aa-agent+jwt', kid: 'k' },
+      { alg: 'Ed25519', typ: 'aa-agent+jwt', kid: 'k' },
       {
         iss: 'https://example.test',
         sub: 'aauth:test@example.test',

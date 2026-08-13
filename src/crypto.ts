@@ -107,13 +107,16 @@ export function decodeJWTHeader(jwt: string): Record<string, unknown> {
   return JSON.parse(json)
 }
 
-// Verify an Ed25519-signed JWT against a JWKS. Finds the verification key by
-// `kid` (falling back to first key if no kid), rejects non-EdDSA algs, and
-// checks the signature. Callers are responsible for payload claim checks
+// Verify a signed JWT against a JWKS. Finds the verification key by `kid`
+// (falling back to first key if no kid), rejects unknown algs, and checks the
+// signature. Callers are responsible for payload claim checks
 // (iss/aud/exp/nbf/jti).
 // Maps JWT alg → WebCrypto import/verify parameters. Extend here for new
-// algorithms. Hellō's issuer JWKS uses RS256; our own JWKS uses EdDSA.
+// algorithms. Hellō's issuer JWKS uses RS256; we sign with the fully-specified
+// alg "Ed25519" (RFC 9864). "EdDSA" stays accepted for tokens minted by peers
+// that have not moved to the fully-specified name.
 const JWT_ALG_PARAMS: Record<string, { importAlgo: any; verifyAlgo: any }> = {
+  Ed25519: { importAlgo: { name: 'Ed25519' }, verifyAlgo: 'Ed25519' },
   EdDSA: { importAlgo: { name: 'Ed25519' }, verifyAlgo: 'Ed25519' },
   RS256: {
     importAlgo: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
