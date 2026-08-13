@@ -111,8 +111,19 @@ function renderJSON(obj) {
 // they're already past. The Bootstrap fieldset itself stays visible
 // because it now hosts the inline Agent Identity block + protocol log
 // from the completed ceremony.
+//
+// Exception: in dev mode the PS picker stays on screen so a developer
+// can re-point the agent at another Person Server without resetting the
+// agent identity. Only the Bootstrap CTA goes away.
 function setAuthenticated(_label) {
-  document.getElementById('bootstrap-controls')?.classList.add('hidden')
+  const controls = document.getElementById('bootstrap-controls')
+  if (isDevMode()) {
+    controls?.classList.remove('hidden')
+    controls?.querySelector('.authz-actions')?.classList.add('hidden')
+    renderPSChooser()
+  } else {
+    controls?.classList.add('hidden')
+  }
   document.getElementById('bootstrap-artifacts')?.classList.remove('hidden')
   document.getElementById('auth-section')?.classList.remove('hidden')
   document.getElementById('resource-section')?.classList.remove('hidden')
@@ -120,6 +131,8 @@ function setAuthenticated(_label) {
 
 function setUnauthenticated() {
   document.getElementById('bootstrap-section')?.classList.remove('hidden')
+  document.getElementById('bootstrap-controls')
+    ?.querySelector('.authz-actions')?.classList.remove('hidden')
   document.getElementById('bootstrap-artifacts')?.classList.add('hidden')
   document.getElementById('auth-section')?.classList.add('hidden')
   document.getElementById('resource-section')?.classList.add('hidden')
@@ -363,19 +376,62 @@ function isDevMode() {
   try { return localStorage.getItem('plausible_ignore') === 'true' } catch { return false }
 }
 
+// The PS named by the agent_token we're holding, if any. Once bootstrapped
+// this — not the radio — is the binding that the resource flows use, so it
+// is what the chooser has to reflect.
+function getBoundPs() {
+  const token = localStorage.getItem('aauth-agent-token')
+  if (!token) return null
+  try { return decodeJWTPayload(token)?.ps || null } catch { return null }
+}
+
+function getSavedPS() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}
+    return typeof saved.ps === 'string' ? saved.ps : null
+  } catch { return null }
+}
+
 function renderPSChooser() {
   if (!isDevMode()) return
   const list = document.getElementById('ps-list')
   if (!list) return
-  list.innerHTML = PS_OPTIONS.map((opt) => `
+  // Bound PS wins over the stored preference — a token in hand is the
+  // ground truth. A PS that isn't in PS_OPTIONS (an older binding, a
+  // hand-edited setting) gets appended so it can still be shown selected.
+  const selected = getBoundPs() || getSavedPS() || DEFAULT_PS
+  const options = PS_OPTIONS.some((o) => o.url === selected)
+    ? PS_OPTIONS
+    : [...PS_OPTIONS, { label: selected, url: selected }]
+  list.innerHTML = options.map((opt) => `
     <li>
       <label class="radio-label">
-        <input type="radio" name="ps-choice" value="${opt.url}"${opt.url === DEFAULT_PS ? ' checked' : ''}>
+        <input type="radio" name="ps-choice" value="${opt.url}"${opt.url === selected ? ' checked' : ''}>
         <span class="ps-url mono">${opt.url}</span>
       </label>
       <button class="copy-btn" type="button" data-copy="${opt.url}" aria-label="Copy"></button>
     </li>
   `).join('')
+}
+
+// Picking a different PS after bootstrap re-mints the agent_token against
+// it. The AP looks the agent up by key thumbprint, so the agent identity
+// survives — only the `ps` claim changes. Pre-bootstrap the radio is just
+// a setting; startBootstrap reads it via getCurrentPS.
+let rebindInFlight = false
+function wirePSRebind() {
+  document.getElementById('ps-list')?.addEventListener('change', async (e) => {
+    const input = e.target
+    if (!input || input.name !== 'ps-choice') return
+    const bound = getBoundPs()
+    if (!bound || bound === input.value || rebindInFlight) return
+    rebindInFlight = true
+    try {
+      await window.aauthRebindPs?.(input.value)
+    } finally {
+      rebindInFlight = false
+    }
+  })
 }
 
 function loadSettings() {
@@ -411,9 +467,14 @@ function saveSettings() {
     } catch { /* ignore corrupt JSON */ }
   }
 
+  // Only dev mode can change the PS, so outside it carry the prior value
+  // through rather than stamping the default over a dev selection.
+  const ps = isDevMode() ? getCurrentPS() : getSavedPS()
+
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     identity_scopes,
     notes_operations,
+    ...(ps ? { ps } : {}),
   }))
 }
 
@@ -453,6 +514,7 @@ function wireSettingsAutosave() {
 ;(async () => {
   hydrateIdentityScopes()
   renderPSChooser()
+  wirePSRebind()
   loadSettings()
   wireSettingsAutosave()
   updateWhoamiUrlPreview()

@@ -83,6 +83,26 @@ async function exportSigningJwk(kp) {
   return jwk
 }
 
+// RFC 9421 covered components for every signed request we make.
+//
+// A signature over a request that carries a body MUST cover
+// content-digest (RFC 9530) — a body the signature doesn't commit to can
+// be swapped in transit while the signature still verifies. The Person
+// Server enforces this and rejects anything else with
+// `signature must cover content-digest on requests with a body`.
+//
+// sigFetch derives the Content-Digest header itself when the component is
+// listed, hashing the exact bytes handed to it as `body`. That means every
+// call site must pass a pre-serialized string — hand it a parsed object
+// and the digest is computed over something other than what goes on the
+// wire, so verification fails at the far end.
+const SIGNED_COMPONENTS = ['@method', '@authority', '@path', 'signature-key']
+const SIGNED_COMPONENTS_WITH_BODY = [
+  '@method', '@authority', '@path', 'content-type', 'content-digest', 'signature-key',
+]
+const signedComponents = (hasBody) =>
+  hasBody ? SIGNED_COMPONENTS_WITH_BODY : SIGNED_COMPONENTS
+
 // Signed fetch helpers exposed for app.js (which can't import sigFetch
 // directly since it isn't bundled).
 //   aauthSigFetch    — sig=jwt (agent_token or auth_token)
@@ -93,9 +113,7 @@ window.aauthSigFetch = async function aauthSigFetch(url, { method = 'GET', heade
   if (!jwt) throw new Error('jwt required for sig=jwt scheme')
   const signingKey = await exportSigningJwk(keyPair)
   const hasBody = body !== undefined && body !== null
-  const components = hasBody
-    ? ['@method', '@authority', '@path', 'content-type', 'signature-key']
-    : ['@method', '@authority', '@path', 'signature-key']
+  const components = signedComponents(hasBody)
   const mergedHeaders = hasBody
     ? { 'Content-Type': 'application/json', ...headers }
     : { ...headers }
@@ -115,9 +133,7 @@ window.aauthSigFetchHwk = async function aauthSigFetchHwk(url, { method = 'POST'
   if (!keyPair) throw new Error('no signing key available')
   const signingKey = await exportSigningJwk(keyPair)
   const hasBody = body !== undefined && body !== null
-  const components = hasBody
-    ? ['@method', '@authority', '@path', 'content-type', 'signature-key']
-    : ['@method', '@authority', '@path', 'signature-key']
+  const components = signedComponents(hasBody)
   const mergedHeaders = hasBody
     ? { 'Content-Type': 'application/json', ...headers }
     : { ...headers }
@@ -693,7 +709,7 @@ async function fetchPersonToken({
       signatureKey: { type: 'jwt', jwt: agentToken },
       // A request with a body to a PS endpoint signs content-digest and
       // content-type as well, so the body is covered by the signature.
-      components: ['@method', '@authority', '@path', 'content-type', 'content-digest', 'signature-key'],
+      components: SIGNED_COMPONENTS_WITH_BODY,
       returnSent: true,
     })
     appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
@@ -794,7 +810,7 @@ async function runBootstrap(psUrl) {
       signingKey: publicJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'hwk' },
-      components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      components: SIGNED_COMPONENTS_WITH_BODY,
       returnSent: true,
     })
     res = response
@@ -823,7 +839,10 @@ async function runBootstrap(psUrl) {
 // Mint a fresh agent_token under the same durable key. The AP looks
 // the agent up by JWK thumbprint, so all we send is a sig=hwk request
 // with the same key the AP recorded at bootstrap.
-async function runRefresh() {
+// psOverride re-points the agent at a different Person Server (dev-mode
+// PS switch). Left undefined, the refreshed token keeps the PS the
+// current one names.
+async function runRefresh(psOverride) {
   const keyPair = window.aauthEphemeral.get()
   if (!keyPair) {
     addLogStep(copy('refresh.cannot_refresh.label'), 'error',
@@ -838,9 +857,9 @@ async function runRefresh() {
   // refreshed token preserves it. If there's no current token (rare —
   // restoreAgentTokenAndKey already returned false in that case), fall
   // back to the user's selected PS.
-  let psUrl
+  let psUrl = psOverride
   const savedToken = localStorage.getItem('aauth-agent-token')
-  if (savedToken) {
+  if (!psUrl && savedToken) {
     try { psUrl = decodeJWTPayloadBrowser(savedToken)?.ps } catch { /* ignore */ }
   }
   if (!psUrl) psUrl = window.getCurrentPS?.() || undefined
@@ -860,7 +879,7 @@ async function runRefresh() {
       signingKey: publicJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'hwk' },
-      components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      components: SIGNED_COMPONENTS_WITH_BODY,
       returnSent: true,
     })
     res = response
@@ -883,6 +902,33 @@ async function runRefresh() {
   window.aauthApplyBootstrapResult(result)
   return result
 }
+
+// ── Dev-mode PS switch ──
+//
+// Re-mint the agent_token against a different Person Server. The AP
+// identifies the agent by JWK thumbprint, so the agent identity and its
+// durable key are untouched — only the `ps` claim moves. Everything
+// scoped to the old PS (the notes auth_token, a half-finished authorize)
+// is dropped first, then we reload so no resource UI is left mounted
+// against a binding that no longer exists. The refresh trail survives the
+// reload via the persisted bootstrap-log.
+async function rebindPs(psUrl) {
+  if (!window.aauthEphemeral.get()) return null
+
+  clearAllPersistedLogs()
+  localStorage.removeItem(NOTES_AUTH_TOKEN_KEY)
+  localStorage.removeItem(PENDING_AUTHZ_KEY)
+
+  document.getElementById('bootstrap-artifacts')?.classList.remove('hidden')
+  setActiveLog('bootstrap-log')
+  clearLog()
+  showLog()
+
+  const result = await runRefresh(psUrl)
+  if (result) location.reload()
+  return result
+}
+window.aauthRebindPs = rebindPs
 
 // ── Main flows: Bootstrap button + Resource Request button ──
 //
@@ -1064,7 +1110,7 @@ async function continueWhoami({ whoamiUrl, bindingPs, hints, keyPair, agentToken
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: personToken },
-      components: ['@method', '@authority', '@path', 'signature-key'],
+      components: SIGNED_COMPONENTS,
       returnSent: true,
     })
     appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
@@ -1170,7 +1216,7 @@ async function retryWhoami(whoamiUrl, whoamiPathDisplay, authToken, keyPair, sig
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: authToken },
-      components: ['@method', '@authority', '@path', 'signature-key'],
+      components: SIGNED_COMPONENTS,
       returnSent: true,
     })
     appendStepBody(step, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
@@ -1559,7 +1605,7 @@ async function runPSTokenExchange({
       signatureKey: { type: 'jwt', jwt: agentToken },
       // Body-carrying request to a PS endpoint: cover content-digest and
       // content-type so the resource_token being exchanged is signed over.
-      components: ['@method', '@authority', '@path', 'content-type', 'content-digest', 'signature-key'],
+      components: SIGNED_COMPONENTS_WITH_BODY,
       returnSent: true,
     })
     appendStepBody(step2, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
@@ -1760,7 +1806,7 @@ async function _deferredPollingImpl(pollUrl, baseUrl, interactionStep, pollStep,
         signingKey: signingJwk,
         signingCryptoKey: keyPair.privateKey,
         signatureKey: { type: 'jwt', jwt: agentToken },
-        components: ['@method', '@authority', '@path', 'signature-key'],
+        components: SIGNED_COMPONENTS,
         returnSent: true,
       })
       // Show the real signed request once, on the first poll cycle.
@@ -2194,7 +2240,7 @@ async function continueNotesAuthorize({
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: personToken },
-      components: ['@method', '@authority', '@path', 'content-type', 'signature-key'],
+      components: SIGNED_COMPONENTS_WITH_BODY,
       returnSent: true,
     })
     appendStepBody(step1, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))
@@ -2465,9 +2511,7 @@ async function callNotesAPI(method, path, body) {
   const origin = window.NOTES_ORIGIN || 'https://notes.aauth.dev'
   const url = `${origin}${path}`
   const hasBody = body !== undefined && body !== null
-  const components = hasBody
-    ? ['@method', '@authority', '@path', 'content-type', 'signature-key']
-    : ['@method', '@authority', '@path', 'signature-key']
+  const components = signedComponents(hasBody)
 
   const copyKey =
     method === 'GET' && path === '/notes' ? 'notes_app.list_request'
@@ -2604,7 +2648,7 @@ async function callDemoResourceApi(authToken) {
       signingKey: signingJwk,
       signingCryptoKey: keyPair.privateKey,
       signatureKey: { type: 'jwt', jwt: authToken },
-      components: ['@method', '@authority', '@path', 'signature-key'],
+      components: SIGNED_COMPONENTS,
       returnSent: true,
     })
     appendStepBody(reqStep, formatRequest(sent.method, sent.url, headersToObject(sent.headers), tryParseBody(sent.body)))

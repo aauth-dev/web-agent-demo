@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
 import { fetch as sigFetch } from '@hellocoop/httpsig'
-import { computeJwkThumbprint, decodeJWTPayload } from '../src/crypto'
+import { computeJwkThumbprint, decodeJWTHeader, decodeJWTPayload } from '../src/crypto'
 
 beforeAll(() => {
   if (!(globalThis as any).crypto) {
@@ -115,6 +115,11 @@ describe('POST /bootstrap', () => {
     expect(out.agent_id).toMatch(/^aauth:[a-z0-9-]+@playground\.test$/)
     expect(out.expires_in).toBe(3600)
     expect(out.ps).toBe('https://ps.test')
+
+    // Header carries the fully-specified alg (RFC 9864), not "EdDSA".
+    const header = decodeJWTHeader(out.agent_token)
+    expect(header.alg).toBe('Ed25519')
+    expect(header.typ).toBe('aa-agent+jwt')
 
     // Token should be bound to the caller's key (cnf.jwk = publicJwk
     // sans WebCrypto-inserted fields).
