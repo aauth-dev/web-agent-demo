@@ -3346,6 +3346,7 @@ ${renderJSON(body)}`;
     }
     await runPSTokenExchange({
       resourceToken,
+      presentedToken: personToken,
       bindingPs,
       psMetadata,
       hints,
@@ -3356,7 +3357,7 @@ ${renderJSON(body)}`;
         postLabel: (path) => `Agent \u2192 Person Server`,
         postLabelResolved: (path, status) => status === 200 || status === 202 ? `Agent \u2192 Person Server` : `Agent \u2192 Person Server \u2192 ${status}`,
         postLabelNetworkError: (path) => `Agent \u2192 Person Server (network error)`,
-        postDescription: `<p>Agent presents the resource_token and its agent_token to the Person Server's auth token endpoint. The PS looks up the person token named by <code>person_token_jti</code>, checks the resource_token's <code>ps</code> and <code>sub</code> against it, then either releases an auth_token immediately (cached consent) or returns a 202 with a consent prompt.</p>`,
+        postDescription: `<p>Agent presents the resource_token and its agent_token to the Person Server's auth token endpoint. The agent also sends the person token it presented to the resource as <code>presented_token</code>; the PS verifies it and checks that the resource_token's <code>presented_jti</code>, <code>ps</code> and <code>sub</code> match it, then either releases an auth_token immediately (cached consent) or returns a 202 with a consent prompt.</p>`,
         consentLabel: copy("authorize.ps_consent_prompt.label"),
         consentDescription: desc("authorize.ps_consent_prompt")
       },
@@ -3592,6 +3593,11 @@ ${renderJSON(body)}`;
   }
   async function runPSTokenExchange({
     resourceToken,
+    // The token the agent presented to the resource that issued the
+    // resource_token — the person token here — which the resource_token's
+    // presented_jti names. AAuth -11 issue #152: the PS verifies it against
+    // the resource_token instead of looking up a retained record.
+    presentedToken,
     bindingPs,
     // PS metadata already fetched for the person-token hop. Both flows
     // pass it through rather than re-fetching the same document.
@@ -3637,6 +3643,7 @@ ${renderJSON(body)}`;
     const psPath = new URL(tokenEndpoint).pathname;
     const psBody = {
       resource_token: resourceToken,
+      presented_token: presentedToken,
       capabilities: ["interaction"],
       // Force the consent screen every time so the demo always shows the
       // full UX — matches the bootstrap + old authorize flows.
@@ -4186,6 +4193,7 @@ ${renderJSON(body)}`;
     }
     await runPSTokenExchange({
       resourceToken,
+      presentedToken: personToken,
       bindingPs,
       psMetadata,
       hints,
