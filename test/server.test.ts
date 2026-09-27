@@ -643,3 +643,74 @@ describe('GET /api/demo', () => {
     expect((await res.json() as any).error).toBe('invalid_token_type')
   })
 })
+
+// ── The call log (@aauth/call-log) ──
+
+describe('the call log', () => {
+  it('writes one callee record per call: the unsigned challenge, /authorize with its resource token as payload, /api/demo with its body; not the agent-provider routes', async () => {
+    const app = await loadApp()
+    const { env } = await makeEnv()
+    // Records go out through emit → EVENTS_QUEUE.send, kept alive by waitUntil.
+    const sent: Array<Record<string, any>> = []
+    env.EVENTS_QUEUE = { send: async (e: Record<string, any>) => void sent.push(e) }
+    const execCtx = { waitUntil: () => {}, passThroughOnException: () => {} }
+    const agent = await makeAgentKey()
+    const ps = await makePersonServer()
+    ps.install()
+
+    const bare = await app.request('/authorize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'playground.demo' }) }, env, execCtx)
+    expect(bare.status).toBe(401)
+    await bare.text()
+
+    const personToken = await ps.mintPersonToken({ aud: env.ORIGIN, agentPublicJwk: agent.publicJwk })
+    const body = JSON.stringify({ scope: 'playground.demo' })
+    const dry = await sigFetch('http://localhost/authorize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signingKey: agent.privateJwk, signatureKey: { type: 'jwt', jwt: personToken }, components: ['@method', '@authority', '@path', 'content-type', 'signature-key'], dryRun: true }) as { headers: Headers }
+    const postHeaders: Record<string, string> = {}
+    dry.headers.forEach((v, k) => { postHeaders[k] = v })
+    const authorized = await app.request('/authorize', { method: 'POST', headers: postHeaders, body }, env, execCtx)
+    expect(authorized.status).toBe(200)
+    await authorized.json()
+
+    const authToken = await ps.mintPersonToken({ aud: env.ORIGIN, agentPublicJwk: agent.publicJwk, typ: 'aa-auth+jwt', extra: { scope: 'playground.demo', name: 'Ada' } })
+    const dryGet = await sigFetch('http://localhost/api/demo', { method: 'GET', signingKey: agent.privateJwk, signatureKey: { type: 'jwt', jwt: authToken }, components: ['@method', '@authority', '@path', 'signature-key'], dryRun: true }) as { headers: Headers }
+    const getHeaders: Record<string, string> = {}
+    dryGet.headers.forEach((v, k) => { getHeaders[k] = v })
+    const demo = await app.request('/api/demo', { method: 'GET', headers: getHeaders }, env, execCtx)
+    expect(demo.status).toBe(200)
+    await demo.json()
+
+    // An agent-provider route and the metadata: not calls between roles.
+    await (await app.request('/bootstrap', { method: 'POST', body: '{}' }, env, execCtx)).text()
+    await (await app.request('/.well-known/aauth-resource.json', {}, env, execCtx)).text()
+
+    // Records are written off the request path; give them a moment.
+    const records = () => sent.filter((e) => e.event === 'aauth.call')
+    for (let i = 0; i < 100 && records().length < 3; i++) await new Promise((r) => setTimeout(r, 10))
+    const all = records()
+    expect(all.map((r) => r.path)).toEqual(['/authorize', '/authorize', '/api/demo'])
+    expect(JSON.stringify(all)).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}\.eyJ/)
+    for (const r of all) expect(r).toMatchObject({ event: 'aauth.call', service: 'playground', side: 'callee', to: env.ORIGIN, to_role: 'resource' })
+    const [challenge, issued, served] = all as [Record<string, any>, Record<string, any>, Record<string, any>]
+
+    // Unsigned: a challenge (level 30), the requirement parsed, a random call_id.
+    expect(challenge).toMatchObject({ method: 'POST', status: 401, level: 30, error: 'person token required', request: { body: { scope: 'playground.demo' } }, response: { params: { 'AAuth-Requirement': { requirement: 'person-token' } } } })
+    expect(challenge.signed).toBeUndefined()
+    expect(challenge.call_id).toMatch(/^[0-9a-f-]{36}$/)
+
+    // The person token signed the authorization request (naming no agent); the resource token in the reply is its payload.
+    expect(issued).toMatchObject({
+      method: 'POST',
+      status: 200,
+      level: 30,
+      signed: { scheme: 'jwt', token: { type: 'aa-person+jwt', payload: { iss: 'https://ps.test' } } },
+      request: { body: { scope: 'playground.demo' } },
+      response: { body: { resource_token: { type: 'aa-resource+jwt', payload: { iss: env.ORIGIN, aud: 'https://ps.test' } } } },
+    })
+    expect(issued.from).toBeUndefined()
+    expect(issued.call_id).toMatch(/^[A-Za-z0-9_-]{43}$/)
+
+    // The auth token: the demo served, its body logged.
+    expect(served).toMatchObject({ method: 'GET', status: 200, signed: { scheme: 'jwt', token: { type: 'aa-auth+jwt' } }, response: { body: { hello: 'Ada', granted_scopes: ['playground.demo'] } } })
+    vi.unstubAllGlobals()
+  })
+})

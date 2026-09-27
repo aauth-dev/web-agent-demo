@@ -18,6 +18,7 @@ import {
 } from './crypto'
 import { generateAgentLocal } from './agent-local'
 import { emit, emitVerifyFailed } from './events'
+import { callLog } from './call-log'
 
 type HonoEnv = { Bindings: Env }
 
@@ -37,6 +38,9 @@ app.use('*', async (c, next) => {
 })
 
 app.use('*', cors())
+// One aauth.call record per call answered (call-log.ts), after CORS so a
+// preflight is not a call.
+app.use('*', callLog)
 
 // Catch every unhandled exception, emit a structured error event with
 // a stack trace, and return a clean 500. Without this, unprotected KV
