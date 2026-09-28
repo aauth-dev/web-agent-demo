@@ -154,6 +154,10 @@ app.get('/.well-known/aauth-resource.json', (c) => {
     description:
       'Sample protected API for the AAuth web agent playground, used to demonstrate the end-to-end authorization flow.',
     logo_uri: c.env.AGENT_LOGO_URI ?? `${origin}/logo.svg`,
+    // /api/demo takes an auth token and nothing else, and /authorize a
+    // person token. Without this the agent reads the spec default,
+    // agent-token, and plans the wrong first call.
+    access_mode: 'auth-token',
     authorization_endpoint: `${origin}/authorize`,
     scope_descriptions: SCOPE_DESCRIPTIONS,
   })
