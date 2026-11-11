@@ -1,4 +1,4 @@
-import { verify as httpSigVerify } from '@hellocoop/httpsig'
+import { verify as httpSigVerify, metadataUrlFor, type KeyResolver } from '@hellocoop/httpsig'
 import type { Context } from 'hono'
 import { computeJwkThumbprint, decodeJWTHeader, decodeJWTPayload, verifyJWT } from './crypto'
 
@@ -34,6 +34,9 @@ export interface SigJwtVerifyOptions {
   // authorization as though it carried authorization. Making the accepted
   // set an explicit argument is what keeps that from being forgotten.
   accept: TokenKind[]
+  // Key discovery for httpsig's verify() (the jwks_uri scheme). From
+  // keyResolverFor(c) in key-resolver.ts.
+  keys: KeyResolver
   // Response to return when the presented token's typ is not accepted.
   // Defaults to a flat 401; endpoints that can tell the agent how to
   // recover (e.g. /authorize challenging with requirement=person-token)
@@ -41,7 +44,8 @@ export interface SigJwtVerifyOptions {
   onTypMismatch?: (c: Context, typ: string | undefined) => Response
   // Optional inner-token verifier: takes the raw JWT string and returns
   // { payload } if it's valid. Use this to verify against our own JWKS
-  // (agent_token from us) or a PS JWKS (auth_token from the PS).
+  // (agent_token from us) or a PS JWKS (auth_token from the PS,
+  // psJwksVerifier).
   verifyInner?: (jwt: string) => Promise<{ payload: Record<string, unknown> }>
   // If true, skip exp check on the inner JWT payload (used for /refresh,
   // where an expired agent_token is precisely what's being renewed).
@@ -73,7 +77,7 @@ export async function verifySigJwt(
     query: url.search.replace(/^\?/, ''),
     headers: c.req.raw.headers,
     body: rawBody,
-  })
+  }, { keyResolver: options.keys })
   if (!sigResult.verified) {
     return c.json({ error: `signature verification failed: ${sigResult.error || 'unknown'}` }, 401)
   }
@@ -139,7 +143,7 @@ export interface SigHwkVerifyResult {
 // agent presents its public key inline rather than referencing a token.
 // Used at /bootstrap and /refresh: the agent has no token yet (bootstrap)
 // or the AP looks the agent up by thumbprint instead (refresh).
-export async function verifySigHwk(c: Context): Promise<SigHwkVerifyResult | Response> {
+export async function verifySigHwk(c: Context, keys: KeyResolver): Promise<SigHwkVerifyResult | Response> {
   const rawBody = await c.req.text()
   const url = new URL(c.req.url)
   const sigResult = await httpSigVerify({
@@ -149,7 +153,7 @@ export async function verifySigHwk(c: Context): Promise<SigHwkVerifyResult | Res
     query: url.search.replace(/^\?/, ''),
     headers: c.req.raw.headers,
     body: rawBody,
-  })
+  }, { keyResolver: keys })
   if (!sigResult.verified) {
     return c.json({ error: `signature verification failed: ${sigResult.error || 'unknown'}` }, 401)
   }
@@ -165,35 +169,41 @@ export async function verifySigHwk(c: Context): Promise<SigHwkVerifyResult | Res
 // document with `dwk`; the issuer's keys are found by fetching
 // `{iss}/.well-known/{dwk}` and following `jwks_uri`. Both the person
 // token (dwk `aauth-person.json`) and the auth token (also issued by the
-// PS, same document) resolve through here.
+// PS, same document) resolve through here, by the key resolver
+// (key-resolver.ts), which caches both documents and requires the
+// metadata `issuer` to equal `iss`.
 export interface IssuerKeys {
   metadata: Record<string, unknown>
   metadataUrl: string
   jwks: { keys: JsonWebKey[] }
 }
 
-export async function resolveIssuerKeys(iss: string, dwk: string): Promise<IssuerKeys> {
-  const metadataUrl = `${iss}/.well-known/${dwk}`
-  const metaRes = await fetch(metadataUrl)
-  if (!metaRes.ok) throw new Error(`fetch ${dwk} failed: ${metaRes.status}`)
-  const metadata = (await metaRes.json()) as Record<string, unknown>
-  const jwksUri = metadata.jwks_uri as string | undefined
-  if (!jwksUri) throw new Error(`${dwk} missing jwks_uri`)
-  const jwksRes = await fetch(jwksUri)
-  if (!jwksRes.ok) throw new Error(`fetch JWKS failed: ${jwksRes.status}`)
-  const jwks = (await jwksRes.json()) as { keys: JsonWebKey[] }
-  return { metadata, metadataUrl, jwks }
+// `kid` is the token header's. With one, the resolver fetches the JWKS
+// again once when the cached copy lacks that kid (the issuer rotated its
+// key), and `jwks` is that one key. Without one, `jwks` is the whole set.
+export async function resolveIssuerKeys(
+  iss: string,
+  dwk: string,
+  keys: KeyResolver,
+  kid?: string,
+): Promise<IssuerKeys> {
+  const metadata = await keys.getMetadata(iss, dwk, { kid })
+  const jwks = kid
+    ? { keys: [await keys.resolveKey({ id: iss, dwk, kid })] }
+    : await keys.getJwks(iss, dwk)
+  return { metadata, metadataUrl: metadataUrlFor(iss, dwk), jwks }
 }
 
 // Build a verifyInner that fetches the PS JWKS (via the JWT's iss+dwk)
 // and verifies against it. Used for auth_tokens at /api/demo.
-export function psJwksVerifier() {
+export function psJwksVerifier(keys: KeyResolver) {
   return async (jwt: string) => {
     const unverified = decodeJWTPayload(jwt)
     const iss = unverified.iss as string | undefined
     const dwk = (unverified.dwk as string | undefined) ?? PERSON_DWK
     if (!iss) throw new Error('token missing iss')
-    const { jwks } = await resolveIssuerKeys(iss, dwk)
+    const kid = decodeJWTHeader(jwt).kid as string | undefined
+    const { jwks } = await resolveIssuerKeys(iss, dwk, keys, kid)
     return verifyJWT(jwt, jwks)
   }
 }
@@ -220,7 +230,7 @@ export interface PersonTokenResult {
 // Throws Error on any verification failure; the message is the reason.
 export async function verifyPersonToken(
   jwt: string,
-  opts: { aud: string; callerJkt: string }
+  opts: { aud: string; callerJkt: string; keys: KeyResolver }
 ): Promise<PersonTokenResult> {
   // 1. typ
   const header = decodeJWTHeader(jwt)
@@ -240,7 +250,12 @@ export async function verifyPersonToken(
   }
   if (issUrl.protocol !== 'https:') throw new Error('iss must be HTTPS')
 
-  const { metadata, metadataUrl, jwks } = await resolveIssuerKeys(iss, PERSON_DWK)
+  const { metadata, metadataUrl, jwks } = await resolveIssuerKeys(
+    iss,
+    PERSON_DWK,
+    opts.keys,
+    header.kid as string | undefined,
+  )
   const { payload } = await verifyJWT(jwt, jwks)
 
   // 3. exp / iat

@@ -19,6 +19,7 @@ import {
 import { generateAgentLocal } from './agent-local'
 import { emit, emitVerifyFailed } from './events'
 import { callLog } from './call-log'
+import { keyResolverFor } from './key-resolver'
 
 type HonoEnv = { Bindings: Env }
 
@@ -182,7 +183,7 @@ app.get('/.well-known/jwks.json', async (c) => {
 // local-part — no per-user identity is involved.
 
 app.post('/bootstrap', async (c) => {
-  const verifyRes = await verifySigHwk(c)
+  const verifyRes = await verifySigHwk(c, keyResolverFor(c))
   if (verifyRes instanceof Response) {
     emitVerifyFailed(c, 'sig_hwk_failed', { detail: await readVerifyError(verifyRes) })
     return verifyRes
@@ -247,7 +248,7 @@ app.post('/bootstrap', async (c) => {
 // web-app refresh pattern).
 
 app.post('/refresh', async (c) => {
-  const verifyRes = await verifySigHwk(c)
+  const verifyRes = await verifySigHwk(c, keyResolverFor(c))
   if (verifyRes instanceof Response) {
     emitVerifyFailed(c, 'sig_hwk_failed', { detail: await readVerifyError(verifyRes) })
     return verifyRes
@@ -294,7 +295,7 @@ app.post('/refresh', async (c) => {
 // across a "fresh start". Authenticated by sig=hwk — only the holder of
 // the key can release its name.
 app.post('/agent/forget', async (c) => {
-  const verifyRes = await verifySigHwk(c)
+  const verifyRes = await verifySigHwk(c, keyResolverFor(c))
   if (verifyRes instanceof Response) {
     emitVerifyFailed(c, 'sig_hwk_failed', { detail: await readVerifyError(verifyRes) })
     return verifyRes
@@ -390,8 +391,10 @@ app.post('/authorize', async (c) => {
   // to be told which one this endpoint wants, so the typ mismatch becomes
   // the requirement=person-token challenge.
   let challenged = false
+  const keys = keyResolverFor(c)
   const verifyRes = await verifySigJwt(c, {
     accept: ['person'],
+    keys,
     onTypMismatch: (ctx, typ) => {
       challenged = true
       emitVerifyFailed(ctx, 'person_token_missing', {
@@ -414,6 +417,7 @@ app.post('/authorize', async (c) => {
     person = await verifyPersonToken(verifyRes.innerJwt, {
       aud: origin,
       callerJkt: verifyRes.callerJkt,
+      keys,
     })
   } catch (err) {
     const detail = (err as Error).message
@@ -554,9 +558,11 @@ app.get('/api/demo', async (c) => {
   // gated on scope. §Person Token Verification: "A recipient MUST reject
   // an aa-person+jwt wherever an auth token is required."
   const origin = c.env.ORIGIN
+  const keys = keyResolverFor(c)
   const verifyRes = await verifySigJwt(c, {
     accept: ['auth'],
-    verifyInner: psJwksVerifier(),
+    keys,
+    verifyInner: psJwksVerifier(keys),
   })
   if (verifyRes instanceof Response) {
     emitVerifyFailed(c, 'sig_jwt_failed', { detail: await readVerifyError(verifyRes) })

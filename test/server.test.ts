@@ -1,13 +1,19 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
 import { fetch as sigFetch } from '@hellocoop/httpsig'
 import { decodeJWTPayload } from '../src/crypto'
+import { clearKeyCache } from '../src/key-resolver'
 
 beforeAll(() => {
   if (!(globalThis as any).crypto) {
     ;(globalThis as any).crypto = webcrypto
   }
 })
+
+// Every test stands up a fresh PS at the same origin with a fresh key. The
+// key resolver caches its documents and holds a one-minute refetch floor
+// per URL, so start each test with an empty store.
+beforeEach(() => clearKeyCache())
 
 // ── Test fixtures ──
 
@@ -318,10 +324,19 @@ describe('POST /authorize', () => {
     return { app, env, agent, ps, personToken }
   }
 
-  async function post(app: any, env: any, bodyObj: unknown, jwt: string, privateJwk: JsonWebKey) {
+  async function post(app: any, env: any, bodyObj: unknown, jwt: string, privateJwk: JsonWebKey, execCtx?: unknown) {
     const body = JSON.stringify(bodyObj)
     const headers = await signedHeaders(body, jwt, privateJwk)
-    return app.request('/authorize', { method: 'POST', headers, body }, env)
+    return app.request('/authorize', { method: 'POST', headers, body }, env, execCtx)
+  }
+
+  // Events go out through emit → EVENTS_QUEUE.send, kept alive by waitUntil.
+  function captureEvents(env: any) {
+    const sent: Array<Record<string, any>> = []
+    env.EVENTS_QUEUE = { send: async (e: Record<string, any>) => void sent.push(e) }
+    const execCtx = { waitUntil: () => {}, passThroughOnException: () => {} }
+    const keyFetches = () => sent.filter((e) => e.event === 'aauth.playground.key_fetch')
+    return { execCtx, keyFetches }
   }
 
   it('rejects a missing scope', async () => {
@@ -430,6 +445,58 @@ describe('POST /authorize', () => {
     const res = await post(app, env, { scope: 'playground.demo' }, token, agent.privateJwk)
     expect(res.status).toBe(400)
     expect((await res.json() as any).error).toBe('invalid_person_token')
+    vi.unstubAllGlobals()
+  })
+
+  it('emits one aauth.playground.key_fetch per document fetched, and none while cached', async () => {
+    const { app, env, agent, personToken } = await setup()
+    const { execCtx, keyFetches } = captureEvents(env)
+
+    const first = await post(app, env, { scope: 'playground.demo' }, personToken, agent.privateJwk, execCtx)
+    expect(first.status).toBe(200)
+    expect(keyFetches()).toEqual([
+      expect.objectContaining({
+        service: 'playground', level: 30, route: '/authorize',
+        doc: 'metadata', url: `${PS_ORIGIN}/.well-known/aauth-person.json`,
+        id: PS_ORIGIN, dwk: 'aauth-person.json', reason: 'cold', ok: true, status: 200,
+      }),
+      expect.objectContaining({
+        service: 'playground', level: 30, route: '/authorize',
+        doc: 'jwks', url: `${PS_ORIGIN}/.well-known/jwks.json`, reason: 'cold', ok: true, status: 200,
+      }),
+    ])
+
+    // The second request is answered from the store: no fetch, no event.
+    const second = await post(app, env, { scope: 'playground.demo' }, personToken, agent.privateJwk, execCtx)
+    expect(second.status).toBe(200)
+    expect(keyFetches()).toHaveLength(2)
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+
+  it('emits a failed key_fetch at level 40 when the PS metadata is unreachable', async () => {
+    const app = await loadApp()
+    const { env } = await makeEnv()
+    const { execCtx, keyFetches } = captureEvents(env)
+    const agent = await makeAgentKey()
+    const ps = await makePersonServer()
+    const token = await ps.mintPersonToken({ aud: env.ORIGIN, agentPublicJwk: agent.publicJwk })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 404 })))
+    const res = await post(app, env, { scope: 'playground.demo' }, token, agent.privateJwk, execCtx)
+    expect(res.status).toBe(400)
+    expect(keyFetches()).toEqual([
+      expect.objectContaining({ level: 40, doc: 'metadata', reason: 'cold', ok: false, status: 404 }),
+    ])
+    vi.unstubAllGlobals()
+  })
+
+  it('rejects a person token when the PS metadata issuer is not its iss', async () => {
+    const { app, env, agent, personToken } = await setup({ metadata: { issuer: 'https://other.test' } })
+    const res = await post(app, env, { scope: 'playground.demo' }, personToken, agent.privateJwk)
+    expect(res.status).toBe(400)
+    const resBody = await res.json() as any
+    expect(resBody.error).toBe('invalid_person_token')
+    expect(resBody.detail).toMatch(/issuer/)
     vi.unstubAllGlobals()
   })
 
